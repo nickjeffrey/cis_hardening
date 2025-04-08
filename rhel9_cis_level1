@@ -1,0 +1,510 @@
+#!/bin/bash
+
+
+
+# CHANGE LOG
+# ----------
+# 2024-08-21	Emeka Machie	Script created based on CIS remediation template
+# 2024-10-17	Nick Jeffrey	Add error checks for idempotency
+# 2024-11-06	Nick Jeffrey	Add error checks to confirm /etc/sysctl.d/ files exist
+
+
+
+# Enable debugging
+set -x
+
+# Start the security hardening process for RHEL9
+echo "Starting security hardening script..."
+
+# Ensure the script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Error: This script must be run as root. Use sudo to run this script." >&2
+    exit 1
+fi
+
+
+# Section 1: Noexec on /tmp
+echo '--------------------------------------'
+echo "Starting script to set noexec on /tmp..."
+
+# Check if /tmp is managed by systemd
+if systemctl is-enabled tmp.mount; then
+    echo "/tmp is managed by systemd. Modifying the systemd unit file."
+    cp /usr/lib/systemd/system/tmp.mount /etc/systemd/system/tmp.mount
+    sed -i 's/Options=.*/Options=mode=1777,strictatime,noexec,nosuid,nodev/' /etc/systemd/system/tmp.mount
+    systemctl daemon-reload
+    systemctl restart tmp.mount
+    echo "/tmp has been remounted with noexec via systemd."
+else
+    echo "/tmp is not managed by systemd. Modifying /etc/fstab."
+    if ! grep -q "^tmpfs /tmp" /etc/fstab; then   #BUGFIX 2024-10-17 adding if statement for idempotency
+        echo "tmpfs /tmp tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0" >> /etc/fstab
+        systemctl daemon-reload 
+        mount -o remount /tmp
+    fi
+fi
+echo "Verifying that noexec is set correctly for /tmp..."
+mount | grep /tmp | grep noexec || echo ERROR: /tmp filesystem is not mounted with noexec, please investigate
+
+
+
+# NOTE: lots of apps depend on shared memory segments being executable, we should probably not set /dev/shm to noexec by default, which is what happens now
+# Section 2: Noexec on /dev/shm
+echo '--------------------------------------'
+echo "Checking noexec option for /dev/shm..."
+if ! grep -q "^tmpfs /dev/shm" /etc/fstab; then
+    sudo sed -i -e "s/^tmpfs \/dev\/shm/#tmpfs \/dev\/shm/g" /etc/fstab
+    echo 'tmpfs /dev/shm tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0' | sudo tee -a /etc/fstab
+    sudo systemctl daemon-reload
+    sudo mount -o remount /dev/shm
+else
+    echo "Not implementing /dev/shm noexec due to potential risk of breaking things."
+fi
+
+
+
+# Section 3: Cryptographic mechanisms for audit tools
+echo '--------------------------------------'
+echo "Ensuring cryptographic mechanisms for audit tools..."
+sudo test -d /etc/aide.conf.d || mkdir -p /etc/aide.conf.d   #BUGFIX 2024-10-17 , added test for directory existence
+if [ ! -f /etc/aide.conf.d/crypto.conf ]; then
+    echo '# CIS 1.3.3 Ensure cryptographic mechanisms are used to protect the integrity of audit tools' | sudo tee /etc/aide.conf.d/crypto.conf
+    echo '/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512'                                               | sudo tee -a /etc/aide.conf.d/crypto.conf
+    echo '/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512'                                                 | sudo tee -a /etc/aide.conf.d/crypto.conf
+    echo '/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512'                                               | sudo tee -a /etc/aide.conf.d/crypto.conf
+    echo '/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512'                                               | sudo tee -a /etc/aide.conf.d/crypto.conf
+    echo '/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512'                                                | sudo tee -a /etc/aide.conf.d/crypto.conf
+    echo '/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512'                                             | sudo tee -a /etc/aide.conf.d/crypto.conf
+fi
+
+
+
+# Section 4: ASLR (Address Space Layout Randomization)
+echo '--------------------------------------'
+echo "Enabling ASLR..."
+test -f /etc/sysctl.d/60-kernel_sysctl.conf || touch /etc/sysctl.d/60-kernel_sysctl.conf  #BUGFIX 2024-11-06 confirm file exists
+if ! grep -q ^kernel.randomize_va_space /etc/sysctl.d/60-kernel_sysctl.conf; then   #BUGFIX 2024-10-17  adding if statement for idempotency
+   echo "kernel.randomize_va_space = 2" | sudo tee -a /etc/sysctl.d/60-kernel_sysctl.conf
+   sudo sysctl -w kernel.randomize_va_space=2
+fi
+
+
+
+# Section 5: Restrict ptrace_scope
+echo '--------------------------------------'
+echo "Restricting ptrace_scope..."
+test -f /etc/sysctl.d/60-kernel_sysctl.conf || touch /etc/sysctl.d/60-kernel_sysctl.conf  #BUGFIX 2024-11-06 confirm file exists
+if ! grep -q ^kernel.yama.ptrace_scope /etc/sysctl.d/60-kernel_sysctl.conf; then   #BUGFIX 2024-10-17  adding if statement for idempotency
+   echo "kernel.yama.ptrace_scope = 1" | sudo tee -a /etc/sysctl.d/60-kernel_sysctl.conf
+   sudo sysctl -w kernel.yama.ptrace_scope=1
+fi
+
+
+
+# Section 6: Disable core dump storage
+echo '--------------------------------------'
+echo "Disabling core dump storage..."
+#echo 'Storage=none' | sudo tee /etc/systemd/coredump.conf  #BUGFIX 2024-10-17  this line not idempotent, use following line instead
+sed -i -e "s/^#Storage=external/Storage=none/g" /etc/systemd/coredump.conf
+sudo systemctl daemon-reload
+
+
+
+# Section 7: Configure login warning banners
+echo '--------------------------------------'
+echo "Configuring login warning banners..."
+echo "Authorized uses only. All activity may be monitored and reported." | sudo tee /etc/issue
+echo "Authorized uses only. All activity may be monitored and reported." | sudo tee /etc/issue.net
+
+
+
+# Section 8: Remove nfs-utils if installed
+echo '--------------------------------------'
+echo "Checking and removing nfs-utils..."
+if dnf list installed nfs-utils &>/dev/null; then
+    sudo dnf -y remove nfs-utils
+fi
+
+
+
+# Section 9: Remove rpcbind if installed
+echo '--------------------------------------'
+echo "Checking and removing rpcbind..."
+if dnf list installed rpcbind &>/dev/null; then
+    sudo dnf -y remove rpcbind
+fi
+
+
+# BUGFIX 2024-10-17 wrapped all the checks in this section with if statements for idempotency
+# Section 10: Network configurations
+echo '--------------------------------------'
+echo "Configuring network parameters..."
+test -f /etc/sysctl.d/60-netipv4_sysctl.conf || touch /etc/sysctl.d/60-netipv4_sysctl.conf  #BUGFIX 2024-11-06 confirm file exists
+test -f /etc/sysctl.d/60-netipv6_sysctl.conf || touch /etc/sysctl.d/60-netipv6_sysctl.conf  #BUGFIX 2024-11-06 confirm file exists
+#
+if ! grep -q ^net.ipv4.ip_forward /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.ip_forward = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.ip_forward=0
+fi
+if ! grep -q ^net.ipv4.conf.all.send_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.send_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.send_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.send_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.send_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.send_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.all.accept_source_route /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.accept_source_route=0
+fi
+if ! grep -q ^net.ipv4.conf.default.accept_source_route /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.accept_source_route=0
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_source_route /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_source_route=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_source_route /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_source_route=0
+fi
+if ! grep -q ^net.ipv4.conf.all.accept_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.accept_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.accept_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.accept_redirects=0
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_redirects /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_redirects=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_redirects /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.all.secure_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.secure_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.secure_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.secure_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.secure_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.secure_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.all.log_martians /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.log_martians = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.log_martians=1
+fi
+if ! grep -q ^net.ipv4.icmp_echo_ignore_broadcasts /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.icmp_echo_ignore_broadcasts = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+fi
+if ! grep -q ^net.ipv4.icmp_ignore_bogus_error_responses /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.icmp_ignore_bogus_error_responses = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1
+fi
+if ! grep -q ^net.ipv4.conf.all.rp_filter /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.rp_filter = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.rp_filter=1
+fi
+if ! grep -q ^net.ipv4.conf.default.rp_filter /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.rp_filter = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.rp_filter=1
+fi
+if ! grep -q ^net.ipv4.tcp_syncookies /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.tcp_syncookies = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.tcp_syncookies=1
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_ra /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_ra = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_ra=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_ra /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_ra = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_ra=0
+fi
+
+
+
+# Section 11: Ensure permissions on cron and system files
+echo '--------------------------------------'
+echo "Configuring permissions on /etc/crontab..."
+test -f /etc/crontab || touch /etc/crontab
+sudo chown root:root /etc/crontab
+sudo chmod 600 /etc/crontab
+
+echo "Configuring permissions on /etc/cron.hourly..."
+test -d /etc/cron.hourly || sudo mkdir -p /etc/cron.hourly
+sudo chown root:root /etc/cron.hourly
+sudo chmod 600 /etc/cron.hourly
+
+echo "Configuring permissions on /etc/cron.daily..."
+test -d /etc/cron.daily || sudo mkdir -p /etc/cron.daily
+sudo chown root:root /etc/cron.daily
+sudo chmod 600 /etc/cron.daily
+
+echo "Configuring permissions on /etc/cron.weekly..."
+test -d /etc/cron.weekly || sudo mkdir -p /etc/cron.weekly
+sudo chown root:root /etc/cron.weekly
+sudo chmod 600 /etc/cron.weekly
+
+echo "Configuring permissions on /etc/cron.monthly..."
+test -d /etc/cron.monthly || sudo mkdir -p /etc/cron.monthly
+sudo chown root:root /etc/cron.monthly
+sudo chmod 600 /etc/cron.monthly
+
+echo "Configuring permissions on /etc/cron.d..."
+test -d /etc/cron.d || sudo mkdir -p /etc/cron.d
+sudo chown root:root /etc/cron.d
+sudo chmod 600 /etc/cron.d
+
+
+
+# Section 12: Ensure cron and at jobs are restricted to authorized users
+echo '--------------------------------------'
+echo "Restricting cron to authorized users..."
+if [ -f /etc/cron.deny ]; then
+    sudo rm -f /etc/cron.deny
+fi
+if [ ! -f /etc/cron.allow ]; then
+    sudo touch /etc/cron.allow
+fi
+sudo chown root:root /etc/cron.allow
+sudo chmod 600 /etc/cron.allow
+if ! grep -q ^root /etc/cron.allow; then
+    echo "root" | sudo tee -a /etc/cron.allow
+fi
+# BUGFIX 2024-10-17  other users in addition to root also need to be able to use cron
+if grep -q ^apache /etc/passwd; then
+    if ! grep -q ^apache /etc/cron.allow; then
+        echo 'apache' >> /etc/cron.allow 
+    fi
+fi
+# BUGFIX 2024-10-17  other users in addition to root also need to be able to use cron
+if grep -q ^nagios /etc/passwd; then
+    if ! grep -q ^nagios /etc/cron.allow; then
+        echo 'nagios' >> /etc/cron.allow 
+    fi
+fi
+
+echo "Restricting at to authorized users..."
+if [ -f /etc/at.deny ]; then
+    sudo rm -f /etc/at.deny
+fi
+if [ ! -f /etc/at.allow ]; then
+    sudo touch /etc/at.allow
+fi
+sudo chown root:root /etc/at.allow
+sudo chmod 600 /etc/at.allow
+if ! grep -q ^root /etc/at.allow; then
+    echo "root" | sudo tee -a /etc/at.allow 
+fi
+
+
+
+# Section 13: SSH configurations
+echo '--------------------------------------'
+test -f /etc/ssh/sshd_config || touch /etc/ssh/sshd_config
+echo "Limiting SSH access..."
+if ! grep -q ^DenyUsers /etc/ssh/sshd_config; then
+    echo "DenyUsers eviluser1 eviluser2" | sudo tee -a /etc/ssh/sshd_config
+fi
+if ! grep -q ^DenyGroups /etc/ssh/sshd_config; then
+    echo "DenyGroups evilgroup1 evilgroup2" | sudo tee -a /etc/ssh/sshd_config
+fi
+
+echo "Disabling SSH root login..."
+sudo sed -i -e "s/#PermitRootLogin prohibit-password/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin no/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin yes/PermitRootLogin no/g" /etc/ssh/sshd_config
+if ! grep -q "^PermitRootLogin no" /etc/ssh/sshd_config; then
+    echo "PermitRootLogin no" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+echo "Configuring SSH warning banner..."
+if ! grep -q "Banner /etc/issue.net" /etc/ssh/sshd_config; then
+    echo "Banner /etc/issue.net" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+echo "Setting SSH MaxAuthTries to 4 or less..."
+sudo sed -i -e "s/#MaxAuthTries 6/MaxAuthTries 4/g" /etc/ssh/sshd_config
+grep -Pi '^\s*maxauthtries\s+([5-9]|[1-9][0-9]+)' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf | while read -r l_out; do sudo sed -ri "/^\s*maxauthtries\s+([5-9]|[1-9][0-9]+)/s/^/# /" "$(awk -F: '{print $1}' <<< $l_out)"; done
+
+echo "Configuring SSH MaxStartups..."
+sudo sed -i -e "s/#MaxStartups 10:30:100/MaxStartups 10:30:60/g" /etc/ssh/sshd_config
+if ! grep -q "^MaxStartups 10:30:60" /etc/ssh/sshd_config; then
+    echo "MaxStartups 10:30:60" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+echo "Setting SSH LoginGraceTime to 1 minute or less..."
+sudo sed -i -e "s/#LoginGraceTime 2m/LoginGraceTime 1m/g" /etc/ssh/sshd_config
+if ! grep -q "^LoginGraceTime 1m" /etc/ssh/sshd_config; then
+    echo "LoginGraceTime 1m" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+
+
+# Section 14: Sudo configurations
+echo '--------------------------------------'
+echo "Ensuring sudo commands use pty..."
+if ! grep -q "^Defaults use_pty" /etc/sudoers; then
+    echo "Defaults use_pty" | sudo tee -a /etc/sudoers
+fi
+
+echo "Ensuring sudo log file exists..."
+if ! grep -q '^Defaults logfile="/var/log/sudo.log"' /etc/sudoers; then
+    echo 'Defaults logfile="/var/log/sudo.log"' | sudo tee -a /etc/sudoers
+fi
+if [ ! -f /var/log/sudo.log ]; then
+    sudo touch /var/log/sudo.log
+fi
+sudo chown root:root /var/log/sudo.log
+
+
+
+# Section 15: Access restrictions for 'su' command
+echo '--------------------------------------'
+echo "Restricting access to the su command..."
+if ! grep -q ^sugroup /etc/group; then
+    sudo groupadd sugroup
+fi
+if [ ! -f /etc/pam.d/su ]; then
+    sudo touch /etc/pam.d/su
+fi
+if ! grep -q 'auth required pam_wheel.so use_uid group=sugroup' /etc/pam.d/su; then
+    echo 'auth required pam_wheel.so use_uid group=sugroup' | sudo tee -a /etc/pam.d/su
+fi
+
+
+
+# Section 16: Shell timeout settings
+echo '--------------------------------------'
+echo "Setting default user shell timeout to 900 seconds or less..."
+if ! grep -q '^readonly TMOUT=900 ; export TMOUT' /etc/profile; then
+    echo 'readonly TMOUT=900 ; export TMOUT' | sudo tee -a /etc/profile
+fi
+
+
+
+# Section 17: Umask settings
+echo '--------------------------------------'
+echo "Setting default user umask to 027 or more restrictive..."
+sudo sed -i -e "s/umask 022/umask 027/g" /etc/bashrc
+if ! grep -q umask /etc/profile; then
+    echo umask 027 | sudo tee -a /etc/profile
+fi
+
+
+
+# Section 18: Journald configurations
+echo '--------------------------------------'
+echo "Configuring journald to compress large log files..."
+if [ ! -f /etc/systemd/journald.conf ]; then
+    sudo touch /etc/systemd/journald.conf
+fi
+sudo sed -i -e "s/#Compress=yes/Compress=yes/g" /etc/systemd/journald.conf
+if ! grep -q "^Compress=yes" /etc/systemd/journald.conf; then
+    echo "Compress=yes" | sudo tee -a /etc/systemd/journald.conf
+    sudo systemctl restart systemd-journald.service
+fi
+
+echo "Configuring journald to write logfiles to persistent disk..."
+if [ ! -f /etc/systemd/journald.conf ]; then
+    sudo touch /etc/systemd/journald.conf
+fi
+sudo sed -i -e "s/#Storage=auto/Storage=persistent/g" /etc/systemd/journald.conf
+if ! grep -q "^Storage=persistent" /etc/systemd/journald.conf; then
+    echo "Storage=persistent" | sudo tee -a /etc/systemd/journald.conf
+    sudo systemctl restart systemd-journald.service
+fi
+
+
+
+# Section 19: Logfile permissions and ownership
+echo '--------------------------------------'
+echo "Ensuring appropriate permissions and ownership for all logfiles..."
+UID_MIN=$(awk '/^\s*UID_MIN/{print $2}' /etc/login.defs)
+find /var/log -type f | while read -r fname; do
+    bname="$(basename "$fname")"
+    fugname="$(stat -Lc "%U %G" "$fname")"
+    funame="$(awk '{print $1}' <<< "$fugname")"
+    fugroup="$(awk '{print $2}' <<< "$fugname")"
+    fuid="$(stat -Lc "%u" "$fname")"
+    fmode="$(stat -Lc "%a" "$fname")"
+    case "$bname" in
+        lastlog | lastlog.* | wtmp | wtmp.* | wtmp-* | btmp | btmp.* | btmp-*)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,2,4,6][0,4]\h*$' <<< "$fmode" && sudo chmod ug-x,o-wx "$fname"
+            ! grep -Pq -- '^\h*root\h*$' <<< "$funame"                   && sudo chown root "$fname"
+            ! grep -Pq -- '^\h*(utmp|root)\h*$' <<< "$fugroup"           && sudo chgrp root "$fname"
+            ;;
+        secure | auth.log | syslog | messages)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,4]0\h*$' <<< "$fmode" && sudo chmod u-x,g-wx,o-rwx "$fname"
+            ! grep -Pq -- '^\h*(syslog|root)\h*$' <<< "$funame"  && sudo chown root "$fname"
+            ! grep -Pq -- '^\h*(adm|root)\h*$' <<< "$fugroup"    && sudo chgrp root "$fname"
+            ;;
+        SSSD | sssd)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,2,4,6]0\h*$' <<< "$fmode" && sudo chmod ug-x,o-rwx "$fname"
+            ! grep -Piq -- '^\h*(SSSD|root)\h*$' <<< "$funame"       && sudo chown root "$fname"
+            ! grep -Piq -- '^\h*(SSSD|root)\h*$' <<< "$fugroup"      && sudo chgrp root "$fname"
+            ;;
+        gdm | gdm3)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,2,4,6]0\h*$' <<< "$fmode" && sudo chmod ug-x,o-rwx "$fname"
+            ! grep -Pq -- '^\h*root\h*$' <<< "$funame"               && sudo chown root "$fname"
+            ! grep -Pq -- '^\h*(gdm3?|root)\h*$' <<< "$fugroup"      && sudo chgrp root "$fname"
+            ;;
+        *.journal | *.journal~)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,4]0\h*$' <<< "$fmode"          && sudo chmod u-x,g-wx,o-rwx "$fname"
+            ! grep -Pq -- '^\h*root\h*$' <<< "$funame"                    && sudo chown root "$fname"
+            ! grep -Pq -- '^\h*(systemd-journal|root)\h*$' <<< "$fugroup" && sudo chgrp root "$fname"
+            ;;
+        *)
+            ! grep -Pq -- '^\h*[0,2,4,6][0,4]0\h*$' <<< "$fmode" && sudo chmod u-x,g-wx,o-rwx "$fname"
+            if [ "$fuid" -ge "$UID_MIN" ] || ! grep -Pq -- '(adm|root|$(id -gn "$funame"))' <<< "$fugroup"; then
+                if [ -n "$(awk -v grp="$fugroup" -F: '$1==grp {print $4}' /etc/group)" ] || ! grep -Pq '(syslog|root)' <<< "$funame"; then
+                    [ "$fuid" -ge "$UID_MIN" ]                        && sudo chown root "$fname"
+                    ! grep -Pq -- '^\h*(adm|root)\h*$' <<< "$fugroup" && sudo chgrp root "$fname"
+                fi
+            fi
+            ;;
+    esac
+done
+
+
+
+# Not Implemented Sections
+echo '--------------------------------------'
+echo "4.4.2 Ensure authselect includes with-faillock"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.5.1 Ensure password creation requirements are configured"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.5.2 Ensure lockout for failed password attempts is configured"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.5.3 Ensure password reuse is limited"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.6.1.1 Ensure password expiration is 365 days or less"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.6.1.2 Ensure minimum days between password changes is configured"
+echo "Not implemented"
+
+echo '--------------------------------------'
+echo "4.6.1.4 Ensure inactive password lock is 30 days or less"
+echo "Not implemented"
+
+echo "Remediation complete. A reboot is strongly recommended."
