@@ -2,7 +2,7 @@
 
 # CHANGE LOG
 # ----------
-# 2025-04-08  njeffrey  Script created
+# 2025-04-08  njeffrey  Script created at https://github.com/nickjeffrey/cis_hardening
 # 2025-04-09  njeffrey  Add support for RHEL8, RHEL9, RHEL10
 
 # NOTES
