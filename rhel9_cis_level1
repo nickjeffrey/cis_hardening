@@ -4,9 +4,9 @@
 
 # CHANGE LOG
 # ----------
-# 2024-08-21	Emeka Machie	Script created based on CIS remediation template
-# 2024-10-17	Nick Jeffrey	Add error checks for idempotency
-# 2024-11-06	Nick Jeffrey	Add error checks to confirm /etc/sysctl.d/ files exist
+# 2024-08-21	emachie	    Script created based on CIS remediation template
+# 2024-10-17	njeffrey	Add error checks for idempotency
+# 2024-11-06	njeffrey	Add error checks to confirm /etc/sysctl.d/ files exist
 
 
 
