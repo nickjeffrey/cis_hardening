@@ -2274,3 +2274,45 @@ if dnf list installed net-snmp &>/dev/null; then
     sudo dnf -y remove net-snmp
 fi
 
+
+
+
+echo '--------------------------------------'
+echo "2.1.21 Disable Postfix Network Listening"
+#
+# quick and dirty fix to change default setting
+if [ -e "/etc/postfix/main.cf" ] ; then
+   sed -i -e "s/^#inet_interfaces = localhost/inet_interfaces = loopback-only/g"  /etc/postfix/main.cf
+   sed -i -e "s/^inet_interfaces = localhost/inet_interfaces = loopback-only/g"   /etc/postfix/main.cf
+fi
+#
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel && { rpm --quiet -q postfix; }; then
+   var_postfix_inet_interfaces='loopback-only'
+   test -f "/etc/postfix/main.cf" || touch "/etc/postfix/main.cf"
+   test -f "/etc/postfix/main.cf" || echo "ERROR: could not create /etc/postfix/main.cf"
+   if [ -e "/etc/postfix/main.cf" ] ; then
+      if [ "$(grep -cP '^inet_interfaces = loopback-only' /etc/postfix/main.cf)" -eq 1 ]; then
+         echo "Already listening on loopback-only, no change required."
+      else
+         # delete the line from the file
+         LC_ALL=C sed -i "/^\s*inet_interfaces\s\+=\s\+/Id" "/etc/postfix/main.cf"
+         #
+         # make sure file has newline at the end
+         sed -i -e '$a\' "/etc/postfix/main.cf"
+         #
+         test -f "/etc/postfix/main.cf.bak" && rm -f "/etc/postfix/main.cf.bak"
+         cp      "/etc/postfix/main.cf"              "/etc/postfix/main.cf.bak"
+         # Insert at the end of the file
+         printf '%s\n' "inet_interfaces=$var_postfix_inet_interfaces" >> "/etc/postfix/main.cf"
+         # Clean up after ourselves.
+         test -f "/etc/postfix/main.cf.bak" && rm -f "/etc/postfix/main.cf.bak"
+         echo Restarting postfix
+         systemctl daemon-reload    #detect any new changes to the config file
+         systemctl restart postfix  #restart to activate new settings
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
