@@ -11,7 +11,7 @@
 # Enable debugging
 set -x
 
-# Start the security hardening process for RHEL9
+# Start the security hardening process for RHEL10
 echo "Starting security hardening script..."
 
 # Ensure the script is run as root
