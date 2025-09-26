@@ -2254,7 +2254,7 @@ fi
 
 
 echo '--------------------------------------'
-echo "2.1.9 Disable Network File System (NFS)""
+echo "2.1.9 Disable Network File System (NFS)"
 if dnf list installed nfs-utils &>/dev/null; then
     sudo dnf -y remove nfs-utils
 fi
