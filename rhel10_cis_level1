@@ -1,0 +1,2189 @@
+#!/bin/bash
+
+
+
+# CHANGE LOG
+# ----------
+# 2025-09-21	njeffrey    Script created based on RHEL10 CIS remediation template
+
+
+
+# Enable debugging
+set -x
+
+# Start the security hardening process for RHEL9
+echo "Starting security hardening script..."
+
+# Ensure the script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Error: This script must be run as root. Use sudo to run this script." >&2
+    exit 1
+fi
+
+
+# Section 1: Noexec on /tmp
+echo '--------------------------------------'
+echo 1.1.2.1.1 Ensure /tmp Located On Separate Partition
+# Check if /tmp is managed by systemd
+if systemctl is-enabled tmp.mount; then
+    echo "/tmp is managed by systemd. Modifying the systemd unit file."
+    cp /usr/lib/systemd/system/tmp.mount /etc/systemd/system/tmp.mount
+    sed -i 's/Options=.*/Options=mode=1777,strictatime,noexec,nosuid,nodev/' /etc/systemd/system/tmp.mount
+    systemctl daemon-reload
+    systemctl restart tmp.mount
+    echo "/tmp has been remounted with noexec via systemd."
+else
+    echo "/tmp is not managed by systemd. Modifying /etc/fstab."
+    if ! grep -q "^tmpfs /tmp" /etc/fstab; then  
+        echo "tmpfs /tmp tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0" >> /etc/fstab
+        systemctl daemon-reload 
+        mount /tmp
+        mount -o remount /tmp
+    fi
+fi
+echo "Verifying that noexec is set correctly for /tmp..."
+mount | grep /tmp | grep noexec || echo ERROR: /tmp filesystem is not mounted with noexec, please investigate
+
+
+
+# NOTE: lots of apps depend on shared memory segments being executable, we should probably not set /dev/shm to noexec by default, which is what happens now
+# Section 2: Noexec on /dev/shm
+echo '--------------------------------------'
+echo 1.1.2.1.1 Ensure /dev/shm is configured
+echo "Checking noexec option for /dev/shm..."
+if ! grep -q "^tmpfs /dev/shm" /etc/fstab; then
+    sudo sed -i -e "s/^tmpfs \/dev\/shm/#tmpfs \/dev\/shm/g" /etc/fstab
+    echo 'tmpfs /dev/shm tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0' | sudo tee -a /etc/fstab
+    sudo systemctl daemon-reload
+    sudo mount -o remount /dev/shm
+else
+    echo "Not implementing /dev/shm noexec due to potential risk of breaking things."
+fi
+
+
+
+
+echo '--------------------------------------'
+echo 6.1.1 Ensure AIDE is installed
+# Advanced Intrusion Detection Environment (AIDE) is a intrusion detection tool that uses predefined rules to check the integrity of 
+# files and directories in the Linux operating system. AIDE has its own database to check the integrity of files and directories.
+dnf list installed aide 2>/dev/null || (
+   echo Installing AIDE
+   dnf install -y aide
+)
+test -f /var/lib/aide/aide.db.new.gz || (
+   echo Initializing AIDE
+   /usr/sbin/aide --init
+   echo Renaming AIDE database
+   test -f /var/lib/aide/aide.db.new.gz && cp -p /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+   test -f /var/lib/aide/aide.db.new    && cp -p /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db
+   echo Performing AIDE check against baseline
+   /usr/sbin/aide --check
+)
+#
+echo Scheduling weekly AIDE check in /etc/crontab
+if ! grep -q "/usr/sbin/aide --check" /etc/crontab ; then
+    echo "05 4 * * * root /usr/sbin/aide --check" >> /etc/crontab
+else
+    sed -i '\!^.* --check.*$!d' /etc/crontab
+    echo "05 4 * * * root /usr/sbin/aide --check" >> /etc/crontab
+fi
+
+
+echo '--------------------------------------'
+echo 6.1.3 Configure AIDE to verify the audit tools
+echo "Ensuring cryptographic mechanisms for audit tools..."
+sudo test -f /usr/sbin/aide || dnf -y install aide		#confirm AIDE is installed
+sudo test -d /etc/aide.conf.d || mkdir -p /etc/aide.conf.d   	#confirm directory exists
+#
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "aide" ; then
+      dnf install -y "aide"
+   fi
+   if grep -i '^.*/usr/sbin/auditctl.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/auditctl.*#/usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/auditd.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/auditd.*#/usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/ausearch.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/ausearch.*#/usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/aureport.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/aureport.*#/usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/autrace.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/autrace.*#/usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/augenrules.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/augenrules.*#/usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/rsyslogd.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/rsyslogd.*#/usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.2.2 Ensuring sudo commands use ure Only Users Logged In To Real tty Can Execute Sudo - sudo use_pty"
+test -f /bin/sudo || dnf -y install sudo
+if ! grep -q "^Defaults use_pty" /etc/sudoers; then
+    echo "Defaults use_pty" | sudo tee -a /etc/sudoers
+fi
+#
+echo "Ensuring sudo log file exists..."
+if ! grep -q '^Defaults logfile="/var/log/sudo.log"' /etc/sudoers; then
+    echo 'Defaults logfile="/var/log/sudo.log"' | sudo tee -a /etc/sudoers
+fi
+if [ ! -f /var/log/sudo.log ]; then
+    sudo touch /var/log/sudo.log
+fi
+sudo chown root:root /var/log/sudo.log
+
+
+echo '--------------------------------------'
+echo "5.2.5 5.2.6 Require Re-Authentication When Using the sudo Command"
+# Remediation is applicable only in certain platforms
+test -d /etc/sudoers.d || mkdir -p /etc/sudoers.d
+if rpm --quiet -q sudo; then
+   var_sudo_timestamp_timeout='5'
+   if grep -Px '^[\s]*Defaults.*timestamp_timeout[\s]*=.*' /etc/sudoers.d/*; then
+     find /etc/sudoers.d/ -type f -exec sed -Ei "/^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=.*/d" {} \;
+   fi
+   if /usr/sbin/visudo -qcf /etc/sudoers; then
+      cp /etc/sudoers /etc/sudoers.bak
+      if ! grep -P '^[\s]*Defaults.*timestamp_timeout[\s]*=[\s]*[-]?\w+.*$' /etc/sudoers; then
+         # sudoers file doesn't define Option timestamp_timeout
+         echo "Defaults timestamp_timeout=${var_sudo_timestamp_timeout}" >> /etc/sudoers
+      else
+         # sudoers file defines Option timestamp_timeout, remediate wrong values if present
+         if grep -qP "^[\s]*Defaults\s.*\btimestamp_timeout[\s]*=[\s]*(?!${var_sudo_timestamp_timeout}\b)[-]?\w+\b.*$" /etc/sudoers; then
+            sed -Ei "s/(^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=)[[:blank:]]*[-]?\w+(.*$)/\1${var_sudo_timestamp_timeout}\2/" /etc/sudoers
+         fi
+      fi
+      # Check validity of sudoers and cleanup bak
+      if /usr/sbin/visudo -qcf /etc/sudoers; then
+         rm -f /etc/sudoers.bak
+      else
+         echo "Fail to validate remediated /etc/sudoers, reverting to original file."
+         mv /etc/sudoers.bak /etc/sudoers
+         false
+      fi
+   else
+      echo "Skipping remediation, /etc/sudoers failed to validate"
+      false
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "1.7.2 Ensure Local Login Warning Banner Is Configured Properly..."
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   cis_banner_text='Authorized users only. All activity may be monitored and reported.'
+   echo "$cis_banner_text" > "/etc/issue"
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "1.7.3 Ensure Remote Login Warning Banner Is Configured Properly..."
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   cis_banner_text='Authorized users only. All activity may be monitored and reported.'
+   echo "$cis_banner_text" > "/etc/issue.net"
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.3.2.2 Configure the Use of the pam_faillock.so Module in the /etc/pam.d/password-auth File"
+if [ -f /usr/bin/authselect ]; then
+    if ! authselect check; then
+echo "
+authselect integrity check failed. Remediation aborted!
+This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+It is not recommended to manually edit the PAM files when authselect tool is available.
+In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+exit 1
+fi
+authselect enable-feature with-faillock
+
+authselect apply-changes -b
+else
+    
+AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+for pam_file in "${AUTH_FILES[@]}"
+do
+    if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+        sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+        sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+        sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+    fi
+    sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+done
+fi
+
+
+echo '--------------------------------------'
+echo "5.3.2.2 Configure the Use of the pam_faillock.so Module in the /etc/pam.d/system-auth File"
+if [ -f /usr/bin/authselect ]; then
+    if ! authselect check; then
+echo "
+authselect integrity check failed. Remediation aborted!
+This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+It is not recommended to manually edit the PAM files when authselect tool is available.
+In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+exit 1
+fi
+authselect enable-feature with-faillock
+
+authselect apply-changes -b
+else
+    
+AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+for pam_file in "${AUTH_FILES[@]}"
+do
+    if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+        sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+        sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+        sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+    fi
+    sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+done
+
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.1 Limit password reuse: password-auth"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q pam; then
+   var_password_pam_remember='24'
+   var_password_pam_remember_control_flag='requisite,required'
+   var_password_pam_remember_control_flag="$(echo $var_password_pam_remember_control_flag | cut -d \, -f 1)"
+   #
+   if [ -f /usr/bin/authselect ]; then
+      if authselect list-features sssd | grep -q with-pwhistory; then
+         if ! authselect check; then
+            echo "
+            authselect integrity check failed. Remediation aborted!
+            This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+            It is not recommended to manually edit the PAM files when authselect tool is available.
+            In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            exit 1
+         fi
+         authselect enable-feature with-pwhistory
+         authselect apply-changes -b
+      else
+         if ! authselect check; then
+            echo "
+            authselect integrity check failed. Remediation aborted!
+            This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+            It is not recommended to manually edit the PAM files when authselect tool is available.
+            In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            exit 1
+         fi
+         CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+         # If not already in use, a custom profile is created preserving the enabled features.
+         if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+            ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+            # The "local" profile does not contain essential security features required by multiple Benchmarks.
+            # If currently used, it is replaced by "sssd", which is the best option in this case.
+            if [[ $CURRENT_PROFILE == local ]]; then
+               CURRENT_PROFILE="sssd"
+            fi
+            authselect create-profile hardening -b $CURRENT_PROFILE
+            CURRENT_PROFILE="custom/hardening"
+            
+            authselect apply-changes -b --backup=before-hardening-custom-profile
+            authselect select $CURRENT_PROFILE
+            for feature in $ENABLED_FEATURES; do
+               authselect enable-feature $feature;
+            done
+            
+            authselect apply-changes -b --backup=after-hardening-custom-profile
+         fi
+         PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
+         PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+
+         authselect apply-changes -b
+        
+         if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
+            # Line matching group + control + module was not found. Check group + module.
+            if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
+               # The control is updated only if one single line matches.
+               sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "$PAM_FILE_PATH"
+            else
+               LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "$PAM_FILE_PATH" | tail -n 1 | cut -d: -f 1)
+               if [ ! -z $LAST_MATCH_LINE ]; then
+                  sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "$PAM_FILE_PATH"
+               else
+                  echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+               fi
+            fi
+         fi
+      fi
+   else
+      if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "/etc/pam.d/password-auth"; then
+         # Line matching group + control + module was not found. Check group + module.
+         if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "/etc/pam.d/password-auth")" -eq 1 ]; then
+            # The control is updated only if one single line matches.
+            sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "/etc/pam.d/password-auth"
+         else
+            LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "/etc/pam.d/password-auth" | tail -n 1 | cut -d: -f 1)
+            if [ ! -z $LAST_MATCH_LINE ]; then
+               sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "/etc/pam.d/password-auth"
+            else
+               echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "/etc/pam.d/password-auth"
+            fi
+         fi
+      fi
+   fi
+   #
+   PWHISTORY_CONF="/etc/security/pwhistory.conf"
+   if [ -f $PWHISTORY_CONF ]; then
+      regex="^\s*remember\s*="
+      line="remember = $var_password_pam_remember"
+      if ! grep -q $regex $PWHISTORY_CONF; then
+         echo $line >> $PWHISTORY_CONF
+      else
+         sed -i --follow-symlinks 's|^\s*\(remember\s*=\s*\)\(\S\+\)|\1'"$var_password_pam_remember"'|g' $PWHISTORY_CONF
+      fi
+      if [ -e "/etc/pam.d/password-auth" ] ; then
+         PAM_FILE_PATH="/etc/pam.d/password-auth"
+         if [ -f /usr/bin/authselect ]; then
+            if ! authselect check; then
+               echo "
+               authselect integrity check failed. Remediation aborted!
+               This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+               It is not recommended to manually edit the PAM files when authselect tool is available.
+               In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+               exit 1
+            fi
+            #
+            CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+            # If not already in use, a custom profile is created preserving the enabled features.
+            if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+               ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+               # The "local" profile does not contain essential security features required by multiple Benchmarks.
+               # If currently used, it is replaced by "sssd", which is the best option in this case.
+               if [[ $CURRENT_PROFILE == local ]]; then
+                  CURRENT_PROFILE="sssd"
+               fi
+               authselect create-profile hardening -b $CURRENT_PROFILE
+               CURRENT_PROFILE="custom/hardening"
+                
+               authselect apply-changes -b --backup=before-hardening-custom-profile
+               authselect select $CURRENT_PROFILE
+               for feature in $ENABLED_FEATURES; do
+                  authselect enable-feature $feature;
+               done
+                
+               authselect apply-changes -b --backup=after-hardening-custom-profile
+            fi
+            PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
+            PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+
+            authselect apply-changes -b
+         fi
+         # 
+         if grep -qP "^\s*password\s.*\bpam_pwhistory.so\s.*\bremember\b" "$PAM_FILE_PATH"; then
+            sed -i -E --follow-symlinks "s/(.*password.*pam_pwhistory.so.*)\bremember\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
+         fi
+         if [ -f /usr/bin/authselect ]; then
+            authselect apply-changes -b
+         fi
+      else
+         echo "/etc/pam.d/password-auth was not found" >&2
+      fi
+   else
+      PAM_FILE_PATH="/etc/pam.d/password-auth"
+      if [ -f /usr/bin/authselect ]; then
+         if ! authselect check; then
+            echo "
+            authselect integrity check failed. Remediation aborted!
+            This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+            It is not recommended to manually edit the PAM files when authselect tool is available.
+            In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            exit 1
+         fi
+         #
+         CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+         # If not already in use, a custom profile is created preserving the enabled features.
+         if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+            ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+            # The "local" profile does not contain essential security features required by multiple Benchmarks.
+            # If currently used, it is replaced by "sssd", which is the best option in this case.
+            if [[ $CURRENT_PROFILE == local ]]; then
+               CURRENT_PROFILE="sssd"
+            fi
+            authselect create-profile hardening -b $CURRENT_PROFILE
+            CURRENT_PROFILE="custom/hardening"
+            
+            authselect apply-changes -b --backup=before-hardening-custom-profile
+            authselect select $CURRENT_PROFILE
+            for feature in $ENABLED_FEATURES; do
+               authselect enable-feature $feature;
+            done
+            
+            authselect apply-changes -b --backup=after-hardening-custom-profile
+         fi
+         PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
+         PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+
+         authselect apply-changes -b
+      fi
+      #
+      if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
+         # Line matching group + control + module was not found. Check group + module.
+         if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
+            # The control is updated only if one single line matches.
+            sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1requisite \2/" "$PAM_FILE_PATH"
+         else
+            echo "password    requisite    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+         fi
+      fi
+      # Check the option
+      if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*\sremember\b" "$PAM_FILE_PATH"; then
+         sed -i -E --follow-symlinks "/\s*password\s+requisite\s+pam_pwhistory.so.*/ s/$/ remember=$var_password_pam_remember/" "$PAM_FILE_PATH"
+      else
+         sed -i -E --follow-symlinks "s/(\s*password\s+requisite\s+pam_pwhistory.so\s+.*)(remember=)[[:alnum:]]*\s*(.*)/\1\2$var_password_pam_remember \3/" "$PAM_FILE_PATH"
+      fi
+      if [ -f /usr/bin/authselect ]; then
+         authselect apply-changes -b
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.1 Lock Accounts After Failed Password Attempts"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q pam; then
+   var_accounts_passwords_pam_faillock_deny='5'
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo "
+         authselect integrity check failed. Remediation aborted!
+         This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+         It is not recommended to manually edit the PAM files when authselect tool is available.
+         In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature with-faillock
+      authselect apply-changes -b
+   else
+      AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+            sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+            sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+         fi
+         sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+      done
+   fi
+   #
+   AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+   SKIP_FAILLOCK_CHECK=false
+   #
+   FAILLOCK_CONF="/etc/security/faillock.conf"
+   if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
+      regex="^\s*deny\s*="
+      line="deny = $var_accounts_passwords_pam_faillock_deny"
+      if ! grep -q $regex $FAILLOCK_CONF; then
+          echo $line >> $FAILLOCK_CONF
+      else
+          sed -i --follow-symlinks 's|^\s*\(deny\s*=\s*\)\(\S\+\)|\1'"$var_accounts_passwords_pam_faillock_deny"'|g' $FAILLOCK_CONF
+      fi
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if [ -e "$pam_file" ] ; then
+            PAM_FILE_PATH="$pam_file"
+            if [ -f /usr/bin/authselect ]; then
+               if ! authselect check; then
+                  echo "
+                  authselect integrity check failed. Remediation aborted!
+                  This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
+                  It is not recommended to manually edit the PAM files when authselect tool is available.
+                  In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+                  exit 1
+               fi
+               CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+               # If not already in use, a custom profile is created preserving the enabled features.
+               if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+                  ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+                  # The "local" profile does not contain essential security features required by multiple Benchmarks.
+                  # If currently used, it is replaced by "sssd", which is the best option in this case.
+                  if [[ $CURRENT_PROFILE == local ]]; then
+                     CURRENT_PROFILE="sssd"
+                  fi
+                  authselect create-profile hardening -b $CURRENT_PROFILE
+                  CURRENT_PROFILE="custom/hardening"
+                  #     
+                  authselect apply-changes -b --backup=before-hardening-custom-profile
+                  authselect select $CURRENT_PROFILE
+                  for feature in $ENABLED_FEATURES; do
+                     authselect enable-feature $feature;
+                  done
+                  authselect apply-changes -b --backup=after-hardening-custom-profile
+               fi
+               PAM_FILE_NAME=$(basename "$pam_file")
+               PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+               authselect apply-changes -b
+            fi
+            # 
+            if grep -qP "^\s*auth\s.*\bpam_faillock.so\s.*\bdeny\b" "$PAM_FILE_PATH"; then
+               sed -i -E --follow-symlinks "s/(.*auth.*pam_faillock.so.*)\bdeny\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
+            fi
+            if [ -f /usr/bin/authselect ]; then
+               authselect apply-changes -b
+            fi
+         else
+            echo "$pam_file was not found" >&2
+         fi
+      done
+   else
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth.*pam_faillock\.so (preauth|authfail).*deny' "$pam_file"; then
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*preauth.*silent.*/ s/$/ deny='"$var_accounts_passwords_pam_faillock_deny"'/' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*authfail.*/ s/$/ deny='"$var_accounts_passwords_pam_faillock_deny"'/' "$pam_file"
+         else
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*preauth.*silent.*\)\('"deny"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_deny"'\3/' "$pam_file"
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*authfail.*\)\('"deny"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_deny"'\3/' "$pam_file"
+         fi
+      done
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+# ERROR IN THIS SECTION 2025-09-25!!!!
+echo '--------------------------------------'
+echo "5.3.3.2 Set LockOut Time for Failed Password Attempts"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q pam; then
+   var_accounts_passwords_pam_faillock_unlock_time='900'
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo "authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature with-faillock
+      authselect apply-changes -b
+   else
+      AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+            sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail'         "$pam_file"
+            sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so'               "$pam_file"
+         fi
+         sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+      done
+   fi
+   #
+   #
+   AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+   SKIP_FAILLOCK_CHECK=false
+   #
+   FAILLOCK_CONF="/etc/security/faillock.conf"
+   if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
+      regex="^\s*unlock_time\s*="
+      line="unlock_time = $var_accounts_passwords_pam_faillock_unlock_time"
+      if ! grep -q $regex $FAILLOCK_CONF; then
+         echo $line >> $FAILLOCK_CONF
+      else
+         sed -i --follow-symlinks 's|^\s*\(unlock_time\s*=\s*\)\(\S\+\)|\1'"$var_accounts_passwords_pam_faillock_unlock_time"'|g' $FAILLOCK_CONF
+      fi
+      # 
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if [ -e "$pam_file" ] ; then
+            PAM_FILE_PATH="$pam_file"
+            if [ -f /usr/bin/authselect ]; then
+               if ! authselect check; then
+                  echo "authselect integrity check failed. Remediation aborted!"
+                  echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+                  echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+                  echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+                  exit 1
+               fi
+               #
+               CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+               # If not already in use, a custom profile is created preserving the enabled features.
+               if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+                  ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+                  # The "local" profile does not contain essential security features required by multiple Benchmarks.
+                  # If currently used, it is replaced by "sssd", which is the best option in this case.
+                  if [[ $CURRENT_PROFILE == local ]]; then
+                     CURRENT_PROFILE="sssd"
+                  fi
+                  authselect create-profile hardening -b $CURRENT_PROFILE
+                  CURRENT_PROFILE="custom/hardening"
+                    
+                  authselect apply-changes -b --backup=before-hardening-custom-profile
+                  authselect select $CURRENT_PROFILE
+                  for feature in $ENABLED_FEATURES; do
+                     authselect enable-feature $feature;
+                  done
+                    
+                  authselect apply-changes -b --backup=after-hardening-custom-profile
+               fi
+               PAM_FILE_NAME=$(basename "$pam_file")
+               PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+
+               authselect apply-changes -b
+            fi
+            # 
+            if grep -qP "^\s*auth\s.*\bpam_faillock.so\s.*\bunlock_time\b" "$PAM_FILE_PATH"; then
+               sed -i -E --follow-symlinks "s/(.*auth.*pam_faillock.so.*)\bunlock_time\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
+            fi
+            if [ -f /usr/bin/authselect ]; then
+               authselect apply-changes -b
+            fi
+         else
+            echo "$pam_file was not found" >&2
+         fi
+      done
+   else
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth.*pam_faillock\.so (preauth|authfail).*unlock_time' "$pam_file"; then
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*preauth.*silent.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*authfail.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/'        "$pam_file"
+         else
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*preauth.*silent.*\)\('"unlock_time"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/' "$pam_file"
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*authfail.*\)\('"unlock_time"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/'        "$pam_file"
+         fi
+      done
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.6 Ensure PAM Enforces Password Requirements - Prevent the Use of Dictionary Words"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   var_password_pam_dictcheck='1'
+   if grep -sq dictcheck /etc/security/pwquality.conf.d/*.conf ; then
+      sed -i "/dictcheck/d" /etc/security/pwquality.conf.d/*.conf
+   fi
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^dictcheck")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_dictcheck"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^dictcheck\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^dictcheck\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      cce="CCE-88171-4"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/security/pwquality.conf" >> "/etc/security/pwquality.conf"
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.1 Ensure PAM Enforces Password Requirements - Minimum Different Characters"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   var_password_pam_difok='2'
+   if grep -sq difok /etc/security/pwquality.conf.d/*.conf ; then
+      sed -i "/difok/d" /etc/security/pwquality.conf.d/*.conf
+   fi
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^difok")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_difok"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^difok\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^difok\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      cce="CCE-90363-3"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/security/pwquality.conf" >> "/etc/security/pwquality.conf"
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.7 Ensure PAM Enforces Password Requirements - Enforce for root user"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   if [ -e "/etc/security/pwquality.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*enforce_for_root/Id" "/etc/security/pwquality.conf"
+   else
+      touch "/etc/security/pwquality.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/security/pwquality.conf"
+   #
+   test -f "/etc/security/pwquality.conf.bak" && rm -f "/etc/security/pwquality.conf.bak"
+   cp "/etc/security/pwquality.conf" "/etc/security/pwquality.conf.bak"
+   # Insert at the end of the file
+   printf '%s\n' "enforce_for_root" >> "/etc/security/pwquality.conf"
+   # Clean up after ourselves.
+   test -f "/etc/security/pwquality.conf.bak" && rm -f "/etc/security/pwquality.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.4 Set Password Maximum Consecutive Repeating Characters"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   var_password_pam_maxrepeat='3'
+   if grep -sq maxrepeat /etc/security/pwquality.conf.d/*.conf ; then
+      sed -i "/maxrepeat/d" /etc/security/pwquality.conf.d/*.conf
+   fi
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^maxrepeat")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_maxrepeat"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^maxrepeat\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^maxrepeat\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      cce="CCE-88015-3"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/security/pwquality.conf" >> "/etc/security/pwquality.conf"
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.3 Ensure PAM Enforces Password Requirements - Minimum Different Categories"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   var_password_pam_minclass='4'
+   if grep -sq minclass /etc/security/pwquality.conf.d/*.conf ; then
+      sed -i "/minclass/d" /etc/security/pwquality.conf.d/*.conf
+   fi
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^minclass")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_minclass"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^minclass\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^minclass\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      cce="CCE-87289-5"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/security/pwquality.conf" >> "/etc/security/pwquality.conf"
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.3.3.2.2 Ensure PAM Enforces Password Requirements - Minimum Length"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q libpwquality; then
+   var_password_pam_minlen='14'
+   if grep -sq minlen /etc/security/pwquality.conf.d/*.conf ; then
+      sed -i "/minlen/d" /etc/security/pwquality.conf.d/*.conf
+   fi
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^minlen")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_minlen"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^minlen\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^minlen\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      cce="CCE-87852-0"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/security/pwquality.conf" >> "/etc/security/pwquality.conf"
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.1.5 Set Account Expiration Following Inactivity"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q shadow-utils; then
+   var_account_disable_post_pw_expiration='30'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^INACTIVE")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s=%s" "$stripped_key" "$var_account_disable_post_pw_expiration"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^INACTIVE\\>" "/etc/default/useradd"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^INACTIVE\\>.*/$escaped_formatted_output/gi" "/etc/default/useradd"
+   else
+      if [[ -s "/etc/default/useradd" ]] && [[ -n "$(tail -c 1 -- "/etc/default/useradd" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/default/useradd"
+      fi
+      cce="CCE-88966-7"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/default/useradd" >> "/etc/default/useradd"
+      printf '%s\n' "$formatted_output" >> "/etc/default/useradd"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.4.1.1 Set Password Maximum Age"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q shadow-utils; then
+   var_accounts_maximum_age_login_defs='365'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^PASS_MAX_DAYS")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$var_accounts_maximum_age_login_defs"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^PASS_MAX_DAYS\\>" "/etc/login.defs"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^PASS_MAX_DAYS\\>.*/$escaped_formatted_output/gi" "/etc/login.defs"
+   else
+      if [[ -s "/etc/login.defs" ]] && [[ -n "$(tail -c 1 -- "/etc/login.defs" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/login.defs"
+      fi
+      cce="CCE-87961-9"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/login.defs" >> "/etc/login.defs"
+      printf '%s\n' "$formatted_output" >> "/etc/login.defs"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.1.1 Set Existing Passwords Maximum Age"
+var_accounts_maximum_age_login_defs='365'
+while IFS= read -r i; do
+   chage -M $var_accounts_maximum_age_login_defs $i
+done <   <(awk -v var="$var_accounts_maximum_age_login_defs" -F: '(/^[^:]+:[^!*]/ && ($5 > var || $5 == "")) {print $1}' /etc/shadow)
+
+
+echo '--------------------------------------'
+echo "5.4.1.6 Ensure all users last password change date is in the past"
+echo "Not implemented... Automatic remediation is not available, in order to avoid any system disruption"
+
+
+echo '--------------------------------------'
+echo "5.3.3.4.1 Prevent Login to Accounts With Empty Password"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo " authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature without-nullok
+      authselect apply-changes -b
+   else
+      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
+         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
+      fi
+      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
+         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
+      fi
+      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
+         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
+      fi
+      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
+         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.2.7 Ensure the Group Used by pam_wheel.so Module Exists on System and is Empty"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q pam; then
+   var_pam_wheel_group_for_su='sugroup'
+   if ! grep -q "^${var_pam_wheel_group_for_su}:[^:]*:[^:]*:[^:]*" /etc/group; then
+      groupadd ${var_pam_wheel_group_for_su}
+   fi
+   #
+   # group must be empty
+   gpasswd -M '' ${var_pam_wheel_group_for_su}
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.2.7 Enforce Usage of pam_wheel with Group Parameter for su Authentication"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q pam; then
+   var_pam_wheel_group_for_su='sugroup'
+   PAM_CONF=/etc/pam.d/su
+   pamstr=$(grep -P '^auth\s+required\s+pam_wheel\.so\s+(?=[^#]*\buse_uid\b)(?=[^#]*\bgroup=)' ${PAM_CONF})
+   if [ -z "$pamstr" ]; then
+      sed -Ei '/^auth\b.*\brequired\b.*\bpam_wheel\.so/d' ${PAM_CONF} # remove any remaining uncommented pam_wheel.so line
+      sed -Ei "/^auth\s+sufficient\s+pam_rootok\.so.*$/a auth             required        pam_wheel.so use_uid group=${var_pam_wheel_group_for_su}" ${PAM_CONF}
+   else
+      group_val=$(echo -n "$pamstr" | grep -Eo '\bgroup=[_a-z][-0-9_a-z]*' | cut -d '=' -f 2)
+      if [ -z "${group_val}" ] || [ ${group_val} != ${var_pam_wheel_group_for_su} ]; then
+         sed -Ei "s/(^auth\s+required\s+pam_wheel.so\s+[^#]*group=)[_a-z][-0-9_a-z]*/\1${var_pam_wheel_group_for_su}/" ${PAM_CONF}
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.4.3.3 Ensure the Default Bash Umask is Set Correctly"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q bash; then
+   var_accounts_user_umask='027'
+   grep -q "^[^#]*\bumask" /etc/bashrc && \
+   sed -i -E -e "s/^([^#]*\bumask)[[:space:]]+[[:digit:]]+/\1 $var_accounts_user_umask/g" /etc/bashrc
+   if ! [ $? -eq 0 ]; then
+      echo "umask $var_accounts_user_umask" >> /etc/bashrc
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.3.3 Ensure the Default Umask is Set Correctly in login.defs"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q shadow-utils; then
+   var_accounts_user_umask='027'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^UMASK")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$var_accounts_user_umask"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^UMASK\\>" "/etc/login.defs"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^UMASK\\>.*/$escaped_formatted_output/gi" "/etc/login.defs"
+   else
+      if [[ -s "/etc/login.defs" ]] && [[ -n "$(tail -c 1 -- "/etc/login.defs" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/login.defs"
+      fi
+      cce="CCE-89314-9"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/login.defs" >> "/etc/login.defs"
+      printf '%s\n' "$formatted_output" >> "/etc/login.defs"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.3.3 Ensure the Default Umask is Set Correctly in /etc/profile"
+var_accounts_user_umask='027'
+readarray -t profile_files < <(find /etc/profile.d/ -type f -name '*.sh' -or -name 'sh.local')
+for file in "${profile_files[@]}" /etc/profile; do
+  grep -qE '^[^#]*umask' "$file" && sed -i -E "s/^(\s*umask\s*)[0-7]+/\1$var_accounts_user_umask/g" "$file"
+done
+if ! grep -qrE '^[^#]*umask' /etc/profile*; then
+  echo "umask $var_accounts_user_umask" >> /etc/profile
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.3.2 Set Interactive Session Timeout"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_accounts_tmout='900'
+   # if 0, no occurence of tmout found, if 1, occurence found
+   tmout_found=0
+   for f in /etc/profile /etc/profile.d/*.sh; do
+      if grep --silent '^[^#].*TMOUT' $f; then
+         sed -i -E "s/^(.*)TMOUT\s*=\s*(\w|\$)*(.*)$/typeset -xr TMOUT=$var_accounts_tmout\3/g" $f
+         tmout_found=1
+      fi
+   done
+   #
+   if [ $tmout_found -eq 0 ]; then
+      echo -e "\n# Set TMOUT to $var_accounts_tmout per security requirements" >> /etc/profile.d/tmout.sh
+      echo "typeset -xr TMOUT=$var_accounts_tmout" >> /etc/profile.d/tmout.sh
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "7.2.9 Ensure All User Initialization Files Have Mode 0740 Or Less Permissive"
+var_user_initialization_files_regex='^\.[\w\- ]+$'
+readarray -t interactive_users < <(awk -F: '$3>=1000   {print $1}' /etc/passwd)
+readarray -t interactive_users_home < <(awk -F: '$3>=1000   {print $6}' /etc/passwd)
+readarray -t interactive_users_shell < <(awk -F: '$3>=1000   {print $7}' /etc/passwd)
+USERS_IGNORED_REGEX='nobody|nfsnobody'
+for (( i=0; i<"${#interactive_users[@]}"; i++ )); do
+   if ! grep -qP "$USERS_IGNORED_REGEX" <<< "${interactive_users[$i]}" && \
+      [ "${interactive_users_shell[$i]}" != "/sbin/nologin" ]; then
+      readarray -t init_files < <(find "${interactive_users_home[$i]}" -maxdepth 1 -exec basename {} \; | grep -P "$var_user_initialization_files_regex")
+      for file in "${init_files[@]}"; do
+         chmod u-s,g-wxs,o= "${interactive_users_home[$i]}/$file"
+      done
+   fi
+done
+
+
+
+
+echo '--------------------------------------'
+echo "6.2.2.1.1 Install systemd-journal-remote Package"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "systemd-journal-remote" ; then
+      dnf install -y "systemd-journal-remote"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "6.2.1.1 Enable systemd-journald Service"
+echo "Not implemented"
+
+
+
+echo '--------------------------------------'
+echo "6.2.2.1.4 Disable systemd-journal-remote Socket"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   SOCKET_NAME="systemd-journal-remote.socket"
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   #
+   if "$SYSTEMCTL_EXEC" -q list-unit-files --type socket | grep -q "$SOCKET_NAME"; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop "$SOCKET_NAME"
+      fi
+      "$SYSTEMCTL_EXEC" mask "$SOCKET_NAME"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "6.2.2.3 Ensure journald is configured to compress large log files"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   found=false
+   # set value in all files if they contain section or key
+   for f in $(echo -n "/etc/systemd/journald.conf.d/complianceascode_hardening.conf /etc/systemd/journald.conf.d/*.conf /etc/systemd/journald.conf"); do
+      if [ ! -e "$f" ]; then
+         continue
+      fi
+      #
+      # find key in section and change value
+      if grep -qzosP "[[:space:]]*\[Journal\]([^\n\[]*\n+)+?[[:space:]]*Compress" "$f"; then
+         sed -i "s/Compress[^(\n)]*/Compress=yes/" "$f"
+         found=true
+         # find section and add key = value to it
+      elif grep -qs "[[:space:]]*\[Journal\]" "$f"; then
+         sed -i "/[[:space:]]*\[Journal\]/a Compress=yes" "$f"
+         found=true
+      fi
+   done
+   #
+   # if section not in any file, append section with key = value to FIRST file in files parameter
+   if ! $found ; then
+      file=$(echo "/etc/systemd/journald.conf.d/complianceascode_hardening.conf /etc/systemd/journald.conf.d/*.conf /etc/systemd/journald.conf" | cut -f1 -d ' ')
+      mkdir -p "$(dirname "$file")"
+      echo -e "[Journal]\nCompress=yes" >> "$file"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "6.2.2.4 Ensure journald is configured to write log files to persistent disk"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   found=false
+   # set value in all files if they contain section or key
+   for f in $(echo -n "/etc/systemd/journald.conf.d/complianceascode_hardening.conf /etc/systemd/journald.conf.d/*.conf /etc/systemd/journald.conf"); do
+      if [ ! -e "$f" ]; then
+         continue
+      fi
+      # find key in section and change value
+      if grep -qzosP "[[:space:]]*\[Journal\]([^\n\[]*\n+)+?[[:space:]]*Storage" "$f"; then
+        sed -i "s/Storage[^(\n)]*/Storage=persistent/" "$f"
+        found=true
+        # find section and add key = value to it
+     elif grep -qs "[[:space:]]*\[Journal\]" "$f"; then
+        sed -i "/[[:space:]]*\[Journal\]/a Storage=persistent" "$f"
+        found=true
+     fi
+   done
+   #
+   # if section not in any file, append section with key = value to FIRST file in files parameter
+   if ! $found ; then
+      file=$(echo "/etc/systemd/journald.conf.d/complianceascode_hardening.conf /etc/systemd/journald.conf.d/*.conf /etc/systemd/journald.conf" | cut -f1 -d ' ')
+      mkdir -p "$(dirname "$file")"
+      echo -e "[Journal]\nStorage=persistent" >> "$file"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "4.2.2 Configure Firewalld to Restrict Loopback Traffic"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "firewalld" ; then
+      dnf install -y "firewalld"
+   fi
+   ipv4_rule='rule family=ipv4 source address="127.0.0.1" destination not address="127.0.0.1" drop'
+   ipv6_rule='rule family=ipv6 source address="::1" destination not address="::1" drop'
+   #
+   if test "$(stat -c %d:%i /)" != "$(stat -c %d:%i /proc/1/root/.)" || { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; }; then
+      firewall-offline-cmd --zone=trusted --add-rich-rule="${ipv4_rule}"
+      firewall-offline-cmd --zone=trusted --add-rich-rule="${ipv6_rule}"
+   elif systemctl is-active firewalld; then
+      firewall-cmd --permanent --zone=trusted --add-rich-rule="${ipv4_rule}"
+      firewall-cmd --permanent --zone=trusted --add-rich-rule="${ipv6_rule}"
+      firewall-cmd --reload
+   else
+      echo "firewalld service is not active. Remediation aborted!"
+      echo "This remediation could not be applied because it depends on firewalld service running."
+      echo "The service is not started by this remediation in order to prevent connection issues."
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "4.2.2 Configure Firewalld to Trust Loopback Traffic"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "firewalld" ; then
+      dnf install -y "firewalld"
+   fi
+   if test "$(stat -c %d:%i /)" != "$(stat -c %d:%i /proc/1/root/.)" || { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; }; then
+      firewall-offline-cmd --zone=trusted --add-interface=lo
+   elif systemctl is-active firewalld; then
+      firewall-cmd --permanent --zone=trusted --add-interface=lo
+      firewall-cmd --reload
+   else
+      echo "firewalld service is not active. Remediation aborted!"
+      echo "This remediation could not be applied because it depends on firewalld service running."
+      echo "The service is not started by this remediation in order to prevent connection issues."
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "2.4.1.8 Restricting cron to authorized users..."
+if [ -f /etc/cron.deny ]; then
+    sudo rm -f /etc/cron.deny
+fi
+if [ ! -f /etc/cron.allow ]; then
+    sudo touch /etc/cron.allow
+fi
+sudo chown root:root /etc/cron.allow
+sudo chmod 600 /etc/cron.allow
+if ! grep -q ^root /etc/cron.allow; then
+    echo "root" | sudo tee -a /etc/cron.allow
+fi
+# other users in addition to root also need to be able to use cron
+if grep -q ^apache /etc/passwd; then
+    if ! grep -q ^apache /etc/cron.allow; then
+        echo 'apache' >> /etc/cron.allow 
+    fi
+fi
+# other users in addition to root also need to be able to use cron
+if grep -q ^nagios /etc/passwd; then
+    if ! grep -q ^nagios /etc/cron.allow; then
+        echo 'nagios' >> /etc/cron.allow 
+    fi
+fi
+
+echo "Restricting at to authorized users..."
+if [ -f /etc/at.deny ]; then
+    sudo rm -f /etc/at.deny
+fi
+if [ ! -f /etc/at.allow ]; then
+    sudo touch /etc/at.allow
+fi
+sudo chown root:root /etc/at.allow
+sudo chmod 600 /etc/at.allow
+if ! grep -q ^root /etc/at.allow; then
+    echo "root" | sudo tee -a /etc/at.allow 
+fi
+
+
+
+echo '--------------------------------------'
+echo "w.4.1.7 Configuring permissions on /etc/crontab..."
+test -f /etc/crontab || touch /etc/crontab
+sudo chown root:root /etc/crontab
+sudo chmod 600 /etc/crontab
+
+echo "Configuring permissions on /etc/cron.hourly..."
+test -d /etc/cron.hourly || sudo mkdir -p /etc/cron.hourly
+sudo chown root:root /etc/cron.hourly
+sudo chmod 600 /etc/cron.hourly
+
+echo "Configuring permissions on /etc/cron.daily..."
+test -d /etc/cron.daily || sudo mkdir -p /etc/cron.daily
+sudo chown root:root /etc/cron.daily
+sudo chmod 600 /etc/cron.daily
+
+echo "Configuring permissions on /etc/cron.weekly..."
+test -d /etc/cron.weekly || sudo mkdir -p /etc/cron.weekly
+sudo chown root:root /etc/cron.weekly
+sudo chmod 600 /etc/cron.weekly
+
+echo "Configuring permissions on /etc/cron.monthly..."
+test -d /etc/cron.monthly || sudo mkdir -p /etc/cron.monthly
+sudo chown root:root /etc/cron.monthly
+sudo chmod 600 /etc/cron.monthly
+
+echo "Configuring permissions on /etc/cron.d..."
+test -d /etc/cron.d || sudo mkdir -p /etc/cron.d
+sudo chown root:root /etc/cron.d
+sudo chmod 600 /etc/cron.d
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.5.1 Enable Randomized Layout of Virtual Address Space"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   # Comment out any occurrences of kernel.randomize_va_space from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*kernel.randomize_va_space.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "kernel.randomize_va_space" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   #
+   # Set runtime for kernel.randomize_va_space
+   #
+   if ! { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; } ; then
+      /sbin/sysctl -q -n -w kernel.randomize_va_space="2"
+   fi
+   #
+   # If kernel.randomize_va_space present in /etc/sysctl.conf, change value to "2"
+   #	else, add "kernel.randomize_va_space = 2" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^kernel.randomize_va_space")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "2"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^kernel.randomize_va_space\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^kernel.randomize_va_space\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      cce="CCE-87876-9"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "${SYSCONFIG_FILE}" >> "${SYSCONFIG_FILE}"
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.5.1 Restrict usage of ptrace to descendant processes"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   # Comment out any occurrences of kernel.yama.ptrace_scope from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*kernel.yama.ptrace_scope.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "kernel.yama.ptrace_scope" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for kernel.yama.ptrace_scope
+   #
+   if ! { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; } ; then
+      /sbin/sysctl -q -n -w kernel.yama.ptrace_scope="1"
+   fi
+   #
+   # If kernel.yama.ptrace_scope present in /etc/sysctl.conf, change value to "1"
+   #	else, add "kernel.yama.ptrace_scope = 1" to /etc/sysctl.conf
+   #
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^kernel.yama.ptrace_scope")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "1"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^kernel.yama.ptrace_scope\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^kernel.yama.ptrace_scope\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      cce="CCE-88785-1"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "${SYSCONFIG_FILE}" >> "${SYSCONFIG_FILE}"
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.5.3 Disable core dump backtraces"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q systemd; then
+   found=false
+   # set value in all files if they contain section or key
+   for f in $(echo -n "/etc/systemd/coredump.conf"); do
+      if [ ! -e "$f" ]; then
+         continue
+      fi
+      # find key in section and change value
+      if grep -qzosP "[[:space:]]*\[Coredump\]([^\n\[]*\n+)+?[[:space:]]*ProcessSizeMax" "$f"; then
+         sed -i "s/ProcessSizeMax[^(\n)]*/ProcessSizeMax=0/" "$f"
+         found=true
+         # find section and add key = value to it
+      elif grep -qs "[[:space:]]*\[Coredump\]" "$f"; then
+         sed -i "/[[:space:]]*\[Coredump\]/a ProcessSizeMax=0" "$f"
+         found=true
+      fi
+   done
+   #
+   # if section not in any file, append section with key = value to FIRST file in files parameter
+   if ! $found ; then
+      file=$(echo "/etc/systemd/coredump.conf" | cut -f1 -d ' ')
+      mkdir -p "$(dirname "$file")"
+      echo -e "[Coredump]\nProcessSizeMax=0" >> "$file"
+  fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.5.4 Disable storing core dump"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q systemd; then
+   found=false
+   # set value in all files if they contain section or key
+   for f in $(echo -n "/etc/systemd/coredump.conf"); do
+      if [ ! -e "$f" ]; then
+         continue
+      fi
+      # find key in section and change value
+      if grep -qzosP "[[:space:]]*\[Coredump\]([^\n\[]*\n+)+?[[:space:]]*Storage" "$f"; then
+         sed -i "s/Storage[^(\n)]*/Storage=none/" "$f"
+         found=true
+         # find section and add key = value to it
+      elif grep -qs "[[:space:]]*\[Coredump\]" "$f"; then
+         sed -i "/[[:space:]]*\[Coredump\]/a Storage=none" "$f"
+         found=true
+      fi
+   done
+   #
+   # if section not in any file, append section with key = value to FIRST file in files parameter
+   if ! $found ; then
+      file=$(echo "/etc/systemd/coredump.conf" | cut -f1 -d ' ')
+      mkdir -p "$(dirname "$file")"
+      echo -e "[Coredump]\nStorage=none" >> "$file"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.1.8 Disable Modprobe Loading of USB Storage Driver"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install usb-storage" /etc/modprobe.d/usb-storage.conf ; then
+      sed -i 's#^install usb-storage.*#install usb-storage /bin/false#g' /etc/modprobe.d/usb-storage.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/usb-storage.conf
+      echo "install usb-storage /bin/false" >> /etc/modprobe.d/usb-storage.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist usb-storage$" /etc/modprobe.d/usb-storage.conf ; then
+      echo "blacklist usb-storage" >> /etc/modprobe.d/usb-storage.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+test -f /etc/ssh/sshd_config || touch /etc/ssh/sshd_config
+echo "5.1.9 Limiting SSH access..."
+if ! grep -q ^DenyUsers /etc/ssh/sshd_config; then
+    echo "DenyUsers eviluser1 eviluser2" | sudo tee -a /etc/ssh/sshd_config
+fi
+if ! grep -q ^DenyGroups /etc/ssh/sshd_config; then
+    echo "DenyGroups evilgroup1 evilgroup2" | sudo tee -a /etc/ssh/sshd_config
+fi
+
+echo "Disabling SSH root login..."
+sudo sed -i -e "s/#PermitRootLogin prohibit-password/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin no/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin yes/PermitRootLogin no/g" /etc/ssh/sshd_config
+if ! grep -q "^PermitRootLogin no" /etc/ssh/sshd_config; then
+    echo "PermitRootLogin no" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+echo "Configuring SSH warning banner..."
+if ! grep -q "Banner /etc/issue.net" /etc/ssh/sshd_config; then
+    echo "Banner /etc/issue.net" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.9 Set SSH Client Alive Count Max"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_keepalive='1'
+   test -d  /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" 
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveCountMax $var_sshd_set_keepalive" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "5.1.9 Set SSH Client Alive Interval"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_idle_timeout_value='300'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   #
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveInterval $sshd_idle_timeout_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.2 Disable Host-Based Authentication"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d|| mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "HostbasedAuthentication no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.19 Disable SSH Access via Empty Passwords"
+#Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" || rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitEmptyPasswords no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" || rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.13 Disable SSH Support for .rhosts Files"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "IgnoreRhosts yes" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.20 Disable SSH Root Login"
+echo Not implemented
+
+
+
+echo '--------------------------------------'
+echo "5.1.21 Do Not Allow SSH Environment Options"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitUserEnvironment no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.14 Ensure SSH LoginGraceTime is configured"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_login_grace_time='60'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LoginGraceTime $var_sshd_set_login_grace_time" >        "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.15 Set SSH Daemon LogLevel to VERBOSE"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LogLevel VERBOSE" >                                     "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.18 Set SSH MaxSessions limit"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_max_sessions='10'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxSessions $var_sshd_max_sessions" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.5 Use Only Strong Key Exchange algorithms"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_strong_kex='-diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1'
+   if [ -e "/etc/ssh/sshd_config" ] ; then
+      LC_ALL=C sed -i "/^\s*KexAlgorithms\s\+/Id" "/etc/ssh/sshd_config"
+   else
+      touch "/etc/ssh/sshd_config"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config"
+   #
+   test -f "/etc/ssh/sshd_config.bak" && rm -f "/etc/ssh/sshd_config.bak"
+   cp "/etc/ssh/sshd_config" "/etc/ssh/sshd_config.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "KexAlgorithms $sshd_strong_kex" > "/etc/ssh/sshd_config"
+   cat "/etc/ssh/sshd_config.bak" >> "/etc/ssh/sshd_config"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.bak" && rm -f "/etc/ssh/sshd_config.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.6 Use Only Strong MACs"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_strong_macs='-hmac-md5,hmac-md5-96,hmac-ripemd160,hmac-sha1-96,umac-64@openssh.com,hmac-md5-etm@openssh.com,hmac-md5-96-etm@openssh.com,hmac-ripemd160-etm@openssh.com,hmac-sha1-96-etm@openssh.com,umac-64-etm@openssh.com'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^MACs")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$sshd_strong_macs"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^MACs\\>" "/etc/ssh/sshd_config"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^MACs\\>.*/$escaped_formatted_output/gi" "/etc/ssh/sshd_config"
+   else
+      if [[ -s "/etc/ssh/sshd_config" ]] && [[ -n "$(tail -c 1 -- "/etc/ssh/sshd_config" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/ssh/sshd_config"
+      fi
+      cce="CCE-86792-9"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/ssh/sshd_config" >> "/etc/ssh/sshd_config"
+      printf '%s\n' "$formatted_output" >> "/etc/ssh/sshd_config"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "4.1.2 Verify nftables Service is Disabled"
+# Remediation is applicable only in certain platforms
+if ( rpm --quiet -q firewalld && rpm --quiet -q nftables && rpm --quiet -q kernel ); then
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+      "$SYSTEMCTL_EXEC" stop 'nftables.service'
+   fi
+   "$SYSTEMCTL_EXEC" disable 'nftables.service'
+   "$SYSTEMCTL_EXEC" mask 'nftables.service'
+   # Disable socket activation if we have a unit file for it
+   if "$SYSTEMCTL_EXEC" -q list-unit-files nftables.socket; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop 'nftables.socket'
+      fi
+      "$SYSTEMCTL_EXEC" mask 'nftables.socket'
+   fi
+   # The service may not be running because it has been started and failed,
+   # so let's reset the state so OVAL checks pass.
+   # Service should be 'inactive', not 'failed' after reboot though.
+   "$SYSTEMCTL_EXEC" reset-failed 'nftables.service' || true
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "3.3.1.1 Configuring network parameters..."
+test -f /etc/sysctl.d/60-netipv4_sysctl.conf || touch /etc/sysctl.d/60-netipv4_sysctl.conf 
+test -f /etc/sysctl.d/60-netipv6_sysctl.conf || touch /etc/sysctl.d/60-netipv6_sysctl.conf 
+#
+if ! grep -q ^net.ipv4.ip_forward /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.ip_forward = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.ip_forward=0
+fi
+if ! grep -q ^net.ipv4.conf.all.send_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.send_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.send_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.send_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.send_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.send_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.all.accept_source_route /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.accept_source_route=0
+fi
+if ! grep -q ^net.ipv4.conf.default.accept_source_route /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.accept_source_route=0
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_source_route /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_source_route=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_source_route /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_source_route = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_source_route=0
+fi
+if ! grep -q ^net.ipv4.conf.all.accept_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.accept_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.accept_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.accept_redirects=0
+fi
+if ! grep -q ^net.ipv6.conf.all.forwarding /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.forwarding = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.forwarding=0
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_redirects /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_redirects=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_redirects /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.all.secure_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.secure_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.secure_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.secure_redirects /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.secure_redirects = 0" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.secure_redirects=0
+fi
+if ! grep -q ^net.ipv4.conf.default.log_martians /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.log_martians = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.log_martians=1
+fi
+if ! grep -q ^net.ipv4.conf.all.log_martians /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.log_martians = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.log_martians=1
+fi
+if ! grep -q ^net.ipv4.icmp_echo_ignore_broadcasts /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.icmp_echo_ignore_broadcasts = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+fi
+if ! grep -q ^net.ipv4.icmp_ignore_bogus_error_responses /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.icmp_ignore_bogus_error_responses = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1
+fi
+if ! grep -q ^net.ipv4.conf.all.rp_filter /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.all.rp_filter = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.all.rp_filter=1
+fi
+if ! grep -q ^net.ipv4.conf.default.rp_filter /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.conf.default.rp_filter = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.conf.default.rp_filter=1
+fi
+if ! grep -q ^net.ipv4.tcp_syncookies /etc/sysctl.d/60-netipv4_sysctl.conf; then
+    echo "net.ipv4.tcp_syncookies = 1" | sudo tee -a /etc/sysctl.d/60-netipv4_sysctl.conf
+    sudo sysctl -w net.ipv4.tcp_syncookies=1
+fi
+if ! grep -q ^net.ipv6.conf.all.accept_ra /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.all.accept_ra = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.all.accept_ra=0
+fi
+if ! grep -q ^net.ipv6.conf.default.accept_ra /etc/sysctl.d/60-netipv6_sysctl.conf; then
+    echo "net.ipv6.conf.default.accept_ra = 0" | sudo tee -a /etc/sysctl.d/60-netipv6_sysctl.conf
+    sudo sysctl -w net.ipv6.conf.default.accept_ra=0
+fi
+
+
