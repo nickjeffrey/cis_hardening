@@ -227,59 +227,52 @@ fi
 echo '--------------------------------------'
 echo "5.3.2.2 Configure the Use of the pam_faillock.so Module in the /etc/pam.d/password-auth File"
 if [ -f /usr/bin/authselect ]; then
-    if ! authselect check; then
-echo "
-authselect integrity check failed. Remediation aborted!
-This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
-It is not recommended to manually edit the PAM files when authselect tool is available.
-In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-exit 1
-fi
-authselect enable-feature with-faillock
-
-authselect apply-changes -b
+   if ! authselect check; then
+      echo " authselect integrity check failed. Remediation aborted!"
+      echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+      echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+      echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+      exit 1
+   fi
+   authselect enable-feature with-faillock
+   authselect apply-changes -b
 else
-    
-AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
-for pam_file in "${AUTH_FILES[@]}"
-do
-    if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
-        sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
-        sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
-        sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
-    fi
-    sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
-done
+   AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+   for pam_file in "${AUTH_FILES[@]}"
+   do
+      if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+         sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+         sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+         sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+      fi
+      sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+   done
 fi
 
 
 echo '--------------------------------------'
 echo "5.3.2.2 Configure the Use of the pam_faillock.so Module in the /etc/pam.d/system-auth File"
 if [ -f /usr/bin/authselect ]; then
-    if ! authselect check; then
-echo "
-authselect integrity check failed. Remediation aborted!
-This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
-It is not recommended to manually edit the PAM files when authselect tool is available.
-In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-exit 1
-fi
-authselect enable-feature with-faillock
-
-authselect apply-changes -b
+   if ! authselect check; then
+      echo " authselect integrity check failed. Remediation aborted!"
+      echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+      echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+      echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+      exit 1
+   fi
+   authselect enable-feature with-faillock
+   authselect apply-changes -b
 else
-    
-AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
-for pam_file in "${AUTH_FILES[@]}"
-do
-    if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
-        sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
-        sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
-        sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
-    fi
-    sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
-done
-
+   AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
+   for pam_file in "${AUTH_FILES[@]}"
+   do
+      if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
+         sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+         sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+         sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+      fi
+      sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
+   done
 fi
 
 
@@ -306,11 +299,10 @@ if rpm --quiet -q pam; then
          authselect apply-changes -b
       else
          if ! authselect check; then
-            echo "
-            authselect integrity check failed. Remediation aborted!
-            This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
-            It is not recommended to manually edit the PAM files when authselect tool is available.
-            In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            echo " authselect integrity check failed. Remediation aborted!"
+            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
             exit 1
          fi
          CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
@@ -330,14 +322,12 @@ if rpm --quiet -q pam; then
             for feature in $ENABLED_FEATURES; do
                authselect enable-feature $feature;
             done
-            
             authselect apply-changes -b --backup=after-hardening-custom-profile
          fi
          PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
          PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-
          authselect apply-changes -b
-        
+         # 
          if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
             # Line matching group + control + module was not found. Check group + module.
             if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
@@ -497,11 +487,10 @@ if rpm --quiet -q pam; then
    var_accounts_passwords_pam_faillock_deny='5'
    if [ -f /usr/bin/authselect ]; then
       if ! authselect check; then
-         echo "
-         authselect integrity check failed. Remediation aborted!
-         This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact.
-         It is not recommended to manually edit the PAM files when authselect tool is available.
-         In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         echo " authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
          exit 1
       fi
       authselect enable-feature with-faillock
@@ -597,9 +586,8 @@ fi
 
 
 
-# ERROR IN THIS SECTION 2025-09-25!!!!
 echo '--------------------------------------'
-echo "5.3.3.2 Set LockOut Time for Failed Password Attempts"
+echo "5.3.3.1.2 Set Lockout Time for Failed Password Attempts"
 # Remediation is applicable only in certain platforms
 if rpm --quiet -q pam; then
    var_accounts_passwords_pam_faillock_unlock_time='900'
@@ -631,6 +619,18 @@ if rpm --quiet -q pam; then
    SKIP_FAILLOCK_CHECK=false
    #
    FAILLOCK_CONF="/etc/security/faillock.conf"
+   #
+   # quick and dirty fixes 
+   sudo sed --follow-symlinks -i -e "s/# unlock_time = 600/unlock_time = 900/g"     $FAILLOCK_CONF  #uncomment default setting
+   sudo sed --follow-symlinks -i -e "s/# deny = 3/deny = 5/g"                       $FAILLOCK_CONF  #uncomment default setting
+   sudo sed --follow-symlinks -i -e "s/# fail_interval = 900/fail_interval = 900/g" $FAILLOCK_CONF  #uncomment default setting
+   #
+   # removing "unlock_time = 900" parameters from /etc/pam.d/password-auth and /etc/pam.d/system-auth
+   sudo sed --follow-symlinks -i -e "s/unlock_time = 900//g"     /etc/pam.d/password-auth
+   sudo sed --follow-symlinks -i -e "s/unlock_time = 900//g"     /etc/pam.d/system-auth
+   #
+   # the rest of this section should never get executed
+   #
    if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
       regex="^\s*unlock_time\s*="
       line="unlock_time = $var_accounts_passwords_pam_faillock_unlock_time"
@@ -675,7 +675,6 @@ if rpm --quiet -q pam; then
                fi
                PAM_FILE_NAME=$(basename "$pam_file")
                PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-
                authselect apply-changes -b
             fi
             # 
@@ -1955,6 +1954,38 @@ fi
 
 
 
+echo '--------------------------------------'
+echo "5.1.1.16 Set SSH authentication attempt limit"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_max_auth_tries_value='4'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxAuthTries $sshd_max_auth_tries_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
 
 
 
@@ -1981,6 +2012,38 @@ if rpm --quiet -q kernel; then
    cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
    # Insert at the beginning of the file
    printf '%s\n' "MaxSessions $var_sshd_max_sessions" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.17 Ensure SSH MaxStartups is configured"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_maxstartups='10:30:60'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxStartups $var_sshd_set_maxstartups" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
    cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
    # Clean up after ourselves.
    test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
@@ -2186,4 +2249,28 @@ if ! grep -q ^net.ipv6.conf.default.accept_ra /etc/sysctl.d/60-netipv6_sysctl.co
     sudo sysctl -w net.ipv6.conf.default.accept_ra=0
 fi
 
+
+
+
+
+echo '--------------------------------------'
+echo "2.1.9 Disable Network File System (NFS)""
+if dnf list installed nfs-utils &>/dev/null; then
+    sudo dnf -y remove nfs-utils
+fi
+
+
+
+echo '--------------------------------------'
+echo "2.1.9 Checking and removing rpcbind..."
+if dnf list installed rpcbind &>/dev/null; then
+    sudo dnf -y remove rpcbind
+fi
+
+
+echo '--------------------------------------'
+echo "2.1.14 Removing Net-SNMP"
+if dnf list installed net-snmp &>/dev/null; then
+    sudo dnf -y remove net-snmp
+fi
 
