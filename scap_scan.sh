@@ -65,7 +65,7 @@ cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 12" && d
 cat /etc/os-release | grep PRETTY_NAME | grep "Fedora"                      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-fedora-ds.xml     && scap_profile=unknown 
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 8"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol8-ds.xml        && scap_profile=xccdf_org.ssgproject.content_profile_standard 
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 9"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol9-ds.xml        && scap_profile=xccdf_org.ssgproject.content_profile_standard 
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 10"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol10-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_standard 
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 10"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol10-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_ospp 
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 11"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol11-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_standard  
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 12"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol12-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_standard 
 #
