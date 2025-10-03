@@ -508,3 +508,1491 @@ echo "4.6.1.4 Ensure inactive password lock is 30 days or less"
 echo "Not implemented"
 
 echo "Remediation complete. A reboot is strongly recommended."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo 6.1.1 Ensure AIDE is installed
+# Advanced Intrusion Detection Environment (AIDE) is a intrusion detection tool that uses predefined rules to check the integrity of
+# files and directories in the Linux operating system. AIDE has its own database to check the integrity of files and directories.
+dnf list installed aide 2>/dev/null || (
+   echo Installing AIDE
+   dnf install -y aide
+)
+test -f /var/lib/aide/aide.db.new.gz || (
+   echo Initializing AIDE
+   /usr/sbin/aide --init
+   echo Renaming AIDE database
+   test -f /var/lib/aide/aide.db.new.gz && cp -p /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+   test -f /var/lib/aide/aide.db.new    && cp -p /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db
+   echo Performing AIDE check against baseline
+   /usr/sbin/aide --check
+)
+#
+echo Scheduling weekly AIDE check in /etc/crontab
+if ! grep -q "/usr/sbin/aide --check" /etc/crontab ; then
+    echo "05 4 * * * root /usr/sbin/aide --check" >> /etc/crontab
+else
+    sed -i '\!^.* --check.*$!d' /etc/crontab
+    echo "05 4 * * * root /usr/sbin/aide --check" >> /etc/crontab
+fi
+
+echo '--------------------------------------'
+echo 6.1.3 Configure AIDE to verify the audit tools
+echo "Ensuring cryptographic mechanisms for audit tools..."
+sudo test -f /usr/sbin/aide || dnf -y install aide              #confirm AIDE is installed
+sudo test -d /etc/aide.conf.d || mkdir -p /etc/aide.conf.d      #confirm directory exists
+#
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "aide" ; then
+      dnf install -y "aide"
+   fi
+   if grep -i '^.*/usr/sbin/auditctl.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/auditctl.*#/usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/auditd.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/auditd.*#/usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/ausearch.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/ausearch.*#/usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/aureport.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/aureport.*#/usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/autrace.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/autrace.*#/usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/augenrules.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/augenrules.*#/usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+   if grep -i '^.*/usr/sbin/rsyslogd.*$' /etc/aide.conf; then
+      sed -i "s#.*/usr/sbin/rsyslogd.*#/usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512#" /etc/aide.conf
+   else
+      echo "/usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512" >> /etc/aide.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "6.2.2.1.1 Install systemd-journal-remote Package"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "systemd-journal-remote" ; then
+      dnf install -y "systemd-journal-remote"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "6.2.1.1 Enable systemd-journald Service"
+echo "Not implemented"
+
+
+
+echo '--------------------------------------'
+echo "6.2.2.1.4 Disable systemd-journal-remote Socket"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   SOCKET_NAME="systemd-journal-remote.socket"
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   #
+   if "$SYSTEMCTL_EXEC" -q list-unit-files --type socket | grep -q "$SOCKET_NAME"; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop "$SOCKET_NAME"
+      fi
+      "$SYSTEMCTL_EXEC" mask "$SOCKET_NAME"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.4.1.1 Set Existing Passwords Maximum Age"
+var_accounts_maximum_age_login_defs='365'
+while IFS= read -r i; do
+   chage -M $var_accounts_maximum_age_login_defs $i
+done <   <(awk -v var="$var_accounts_maximum_age_login_defs" -F: '(/^[^:]+:[^!*]/ && ($5 > var || $5 == "")) {print $1}' /etc/shadow)
+
+
+echo '--------------------------------------'
+echo "5.4.1.6 Ensure all users last password change date is in the past"
+echo "Not implemented... Automatic remediation is not available, in order to avoid any system disruption"
+
+
+echo '--------------------------------------'
+echo "5.3.3.4.1 Prevent Login to Accounts With Empty Password"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo " authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature without-nullok
+      authselect apply-changes -b
+   else
+      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
+         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
+      fi
+      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
+         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
+      fi
+      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
+         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
+      fi
+      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
+         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo 1.6.1 Configure System Cryptography Policy
+# for RHEL9 only, does not seem to exist in RHEL10
+# this updates the /etc/crypto-policy/config file
+var_system_crypto_policy='DEFAULT:NO-SHA1'
+stderr_of_call=$(update-crypto-policies --set ${var_system_crypto_policy} 2>&1 > /dev/null)
+rc=$?
+if test "$rc" = 127; then
+   echo "$stderr_of_call" >&2
+   echo "Make sure that the script is installed on the remediated system." >&2
+   echo "See output of the 'dnf provides update-crypto-policies' command" >&2
+   echo "to see what package to (re)install" >&2
+   false  # end with an error code
+elif test "$rc" != 0; then
+   echo "Error invoking the update-crypto-policies script: $stderr_of_call" >&2
+   false  # end with an error code
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.2.2 Ensuring Only Users Logged In To Real tty Can Execute Sudo - sudo use_pty"
+test -f /bin/sudo || dnf -y install sudo
+if ! grep -q "^Defaults use_pty" /etc/sudoers; then
+    echo "Defaults use_pty" | sudo tee -a /etc/sudoers
+fi
+#
+echo "Ensuring sudo log file exists..."
+if ! grep -q '^Defaults logfile="/var/log/sudo.log"' /etc/sudoers; then
+    echo 'Defaults logfile="/var/log/sudo.log"' | sudo tee -a /etc/sudoers
+fi
+if [ ! -f /var/log/sudo.log ]; then
+    sudo touch /var/log/sudo.log
+fi
+sudo chown root:root /var/log/sudo.log
+
+
+echo '--------------------------------------'
+echo "5.2.5 5.2.6 Require Re-Authentication When Using the sudo Command"
+# Remediation is applicable only in certain platforms
+test -d /etc/sudoers.d || mkdir -p /etc/sudoers.d
+if rpm --quiet -q sudo; then
+   var_sudo_timestamp_timeout='5'
+   if grep -Px '^[\s]*Defaults.*timestamp_timeout[\s]*=.*' /etc/sudoers.d/*; then
+     find /etc/sudoers.d/ -type f -exec sed -Ei "/^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=.*/d" {} \;
+   fi
+   if /usr/sbin/visudo -qcf /etc/sudoers; then
+      cp /etc/sudoers /etc/sudoers.bak
+      if ! grep -P '^[\s]*Defaults.*timestamp_timeout[\s]*=[\s]*[-]?\w+.*$' /etc/sudoers; then
+         # sudoers file doesn't define Option timestamp_timeout
+         echo "Defaults timestamp_timeout=${var_sudo_timestamp_timeout}" >> /etc/sudoers
+      else
+         # sudoers file defines Option timestamp_timeout, remediate wrong values if present
+         if grep -qP "^[\s]*Defaults\s.*\btimestamp_timeout[\s]*=[\s]*(?!${var_sudo_timestamp_timeout}\b)[-]?\w+\b.*$" /etc/sudoers; then
+            sed -Ei "s/(^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=)[[:blank:]]*[-]?\w+(.*$)/\1${var_sudo_timestamp_timeout}\2/" /etc/sudoers
+         fi
+      fi
+      # Check validity of sudoers and cleanup bak
+      if /usr/sbin/visudo -qcf /etc/sudoers; then
+         rm -f /etc/sudoers.bak
+      else
+         echo "Fail to validate remediated /etc/sudoers, reverting to original file."
+         mv /etc/sudoers.bak /etc/sudoers
+         false
+      fi
+   else
+      echo "Skipping remediation, /etc/sudoers failed to validate"
+      false
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "4.2.2 Configure Firewalld to Restrict Loopback Traffic"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "firewalld" ; then
+      dnf install -y "firewalld"
+   fi
+   ipv4_rule='rule family=ipv4 source address="127.0.0.1" destination not address="127.0.0.1" drop'
+   ipv6_rule='rule family=ipv6 source address="::1" destination not address="::1" drop'
+   #
+   if test "$(stat -c %d:%i /)" != "$(stat -c %d:%i /proc/1/root/.)" || { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; }; then
+      firewall-offline-cmd --zone=trusted --add-rich-rule="${ipv4_rule}"
+      firewall-offline-cmd --zone=trusted --add-rich-rule="${ipv6_rule}"
+   elif systemctl is-active firewalld; then
+      firewall-cmd --permanent --zone=trusted --add-rich-rule="${ipv4_rule}"
+      firewall-cmd --permanent --zone=trusted --add-rich-rule="${ipv6_rule}"
+      firewall-cmd --reload
+   else
+      echo "firewalld service is not active. Remediation aborted!"
+      echo "This remediation could not be applied because it depends on firewalld service running."
+      echo "The service is not started by this remediation in order to prevent connection issues."
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "4.2.2 Configure Firewalld to Trust Loopback Traffic"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "firewalld" ; then
+      dnf install -y "firewalld"
+   fi
+   if test "$(stat -c %d:%i /)" != "$(stat -c %d:%i /proc/1/root/.)" || { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f "/run/.containerenv" ] || [ -f "/.containerenv" ]; }; }; then
+      firewall-offline-cmd --zone=trusted --add-interface=lo
+   elif systemctl is-active firewalld; then
+      firewall-cmd --permanent --zone=trusted --add-interface=lo
+      firewall-cmd --reload
+   else
+      echo "firewalld service is not active. Remediation aborted!"
+      echo "This remediation could not be applied because it depends on firewalld service running."
+      echo "The service is not started by this remediation in order to prevent connection issues."
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "4.1.2 Verify nftables Service is Disabled"
+# Remediation is applicable only in certain platforms
+if ( rpm --quiet -q firewalld && rpm --quiet -q nftables && rpm --quiet -q kernel ); then
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+      "$SYSTEMCTL_EXEC" stop 'nftables.service'
+   fi
+   "$SYSTEMCTL_EXEC" disable 'nftables.service'
+   "$SYSTEMCTL_EXEC" mask 'nftables.service'
+   # Disable socket activation if we have a unit file for it
+   if "$SYSTEMCTL_EXEC" -q list-unit-files nftables.socket; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop 'nftables.socket'
+      fi
+      "$SYSTEMCTL_EXEC" mask 'nftables.socket'
+   fi
+   # The service may not be running because it has been started and failed,
+   # so let's reset the state so OVAL checks pass.
+   # Service should be 'inactive', not 'failed' after reboot though.
+   "$SYSTEMCTL_EXEC" reset-failed 'nftables.service' || true
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+test -f /etc/ssh/sshd_config || touch /etc/ssh/sshd_config
+echo "5.1.9 Limiting SSH access..."
+if ! grep -q ^DenyUsers /etc/ssh/sshd_config; then
+    echo "DenyUsers eviluser1 eviluser2" | sudo tee -a /etc/ssh/sshd_config
+fi
+if ! grep -q ^DenyGroups /etc/ssh/sshd_config; then
+    echo "DenyGroups evilgroup1 evilgroup2" | sudo tee -a /etc/ssh/sshd_config
+fi
+
+echo "Disabling SSH root login..."
+sudo sed -i -e "s/#PermitRootLogin prohibit-password/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin no/PermitRootLogin no/g" /etc/ssh/sshd_config
+sudo sed -i -e "s/#PermitRootLogin yes/PermitRootLogin no/g" /etc/ssh/sshd_config
+if ! grep -q "^PermitRootLogin no" /etc/ssh/sshd_config; then
+    echo "PermitRootLogin no" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+echo "Configuring SSH warning banner..."
+if ! grep -q "Banner /etc/issue.net" /etc/ssh/sshd_config; then
+    echo "Banner /etc/issue.net" | sudo tee -a /etc/ssh/sshd_config
+    sudo systemctl restart sshd
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.9 Set SSH Client Alive Count Max"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_keepalive='1'
+   test -d  /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveCountMax $var_sshd_set_keepalive" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "5.1.9 Set SSH Client Alive Interval"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_idle_timeout_value='300'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   #
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveInterval $sshd_idle_timeout_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.2 Disable Host-Based Authentication"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d|| mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "HostbasedAuthentication no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.19 Disable SSH Access via Empty Passwords"
+#Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" || rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitEmptyPasswords no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" || rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "5.1.13 Disable SSH Support for .rhosts Files"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "IgnoreRhosts yes" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.20 Disable SSH Root Login"
+echo Not implemented
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.21 Do Not Allow SSH Environment Options"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf || touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitUserEnvironment no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" && rm -f "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.14 Ensure SSH LoginGraceTime is configured"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_login_grace_time='60'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LoginGraceTime $var_sshd_set_login_grace_time" >        "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.15 Set SSH Daemon LogLevel to VERBOSE"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LogLevel VERBOSE" >                                     "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "5.1.1.16 Set SSH authentication attempt limit"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_max_auth_tries_value='4'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   #
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxAuthTries $sshd_max_auth_tries_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.18 Set SSH MaxSessions limit"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_max_sessions='10'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxSessions $var_sshd_max_sessions" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "5.1.17 Ensure SSH MaxStartups is configured"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   var_sshd_set_maxstartups='10:30:60'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   test -f /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf || touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"                   "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxStartups $var_sshd_set_maxstartups" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" && rm -f "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "5.1.5 Use Only Strong Key Exchange algorithms"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_strong_kex='-diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1'
+   if [ -e "/etc/ssh/sshd_config" ] ; then
+      LC_ALL=C sed -i "/^\s*KexAlgorithms\s\+/Id" "/etc/ssh/sshd_config"
+   else
+      touch "/etc/ssh/sshd_config"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config"
+   #
+   test -f "/etc/ssh/sshd_config.bak" && rm -f "/etc/ssh/sshd_config.bak"
+   cp "/etc/ssh/sshd_config" "/etc/ssh/sshd_config.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "KexAlgorithms $sshd_strong_kex" > "/etc/ssh/sshd_config"
+   cat "/etc/ssh/sshd_config.bak" >> "/etc/ssh/sshd_config"
+   # Clean up after ourselves.
+   test -f "/etc/ssh/sshd_config.bak" && rm -f "/etc/ssh/sshd_config.bak"
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "5.1.6 Use Only Strong MACs"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   sshd_strong_macs='-hmac-md5,hmac-md5-96,hmac-ripemd160,hmac-sha1-96,umac-64@openssh.com,hmac-md5-etm@openssh.com,hmac-md5-96-etm@openssh.com,hmac-ripemd160-etm@openssh.com,hmac-sha1-96-etm@openssh.com,umac-64-etm@openssh.com'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^MACs")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$sshd_strong_macs"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^MACs\\>" "/etc/ssh/sshd_config"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^MACs\\>.*/$escaped_formatted_output/gi" "/etc/ssh/sshd_config"
+   else
+      if [[ -s "/etc/ssh/sshd_config" ]] && [[ -n "$(tail -c 1 -- "/etc/ssh/sshd_config" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/ssh/sshd_config"
+      fi
+      cce="CCE-86792-9"
+      printf '# Per %s: Set %s in %s\n' "${cce}" "${formatted_output}" "/etc/ssh/sshd_config" >> "/etc/ssh/sshd_config"
+      printf '%s\n' "$formatted_output" >> "/etc/ssh/sshd_config"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "2.1.9 Disable Network File System (NFS)"
+if dnf list installed nfs-utils &>/dev/null; then
+    sudo dnf -y remove nfs-utils
+fi
+
+
+
+echo '--------------------------------------'
+echo "2.1.9 Checking and removing rpcbind..."
+if dnf list installed rpcbind &>/dev/null; then
+    sudo dnf -y remove rpcbind
+fi
+
+
+echo '--------------------------------------'
+echo "2.1.14 Removing Net-SNMP"
+if dnf list installed net-snmp &>/dev/null; then
+    sudo dnf -y remove net-snmp
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "2.1.21 Disable Postfix Network Listening"
+#
+# quick and dirty fix to change default setting
+if [ -e "/etc/postfix/main.cf" ] ; then
+   sed -i -e "s/^#inet_interfaces = localhost/inet_interfaces = loopback-only/g"  /etc/postfix/main.cf
+   sed -i -e "s/^inet_interfaces = localhost/inet_interfaces = loopback-only/g"   /etc/postfix/main.cf
+fi
+#
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel && { rpm --quiet -q postfix; }; then
+   var_postfix_inet_interfaces='loopback-only'
+   test -f "/etc/postfix/main.cf" || touch "/etc/postfix/main.cf"
+   test -f "/etc/postfix/main.cf" || echo "ERROR: could not create /etc/postfix/main.cf"
+   if [ -e "/etc/postfix/main.cf" ] ; then
+      if [ "$(grep -cP '^inet_interfaces = loopback-only' /etc/postfix/main.cf)" -eq 1 ]; then
+         echo "Already listening on loopback-only, no change required."
+      else
+         # delete the line from the file
+         LC_ALL=C sed -i "/^\s*inet_interfaces\s\+=\s\+/Id" "/etc/postfix/main.cf"
+         #
+         # make sure file has newline at the end
+         sed -i -e '$a\' "/etc/postfix/main.cf"
+         #
+         test -f "/etc/postfix/main.cf.bak" && rm -f "/etc/postfix/main.cf.bak"
+         cp      "/etc/postfix/main.cf"              "/etc/postfix/main.cf.bak"
+         # Insert at the end of the file
+         printf '%s\n' "inet_interfaces=$var_postfix_inet_interfaces" >> "/etc/postfix/main.cf"
+         # Clean up after ourselves.
+         test -f "/etc/postfix/main.cf.bak" && rm -f "/etc/postfix/main.cf.bak"
+         echo Restarting postfix
+         systemctl daemon-reload    #detect any new changes to the config file
+         systemctl restart postfix  #restart to activate new settings
+      fi
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.1.1 Disable Mounting of cramfs"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install cramfs" /etc/modprobe.d/cramfs.conf ; then
+      sed -i 's#^install cramfs.*#install cramfs /bin/false#g' /etc/modprobe.d/cramfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/cramfs.conf
+      echo "install cramfs /bin/false" >> /etc/modprobe.d/cramfs.conf
+   fi
+   #
+   if ! LC_ALL=C grep -q -m 1 "^blacklist cramfs$" /etc/modprobe.d/cramfs.conf ; then
+      echo "blacklist cramfs" >> /etc/modprobe.d/cramfs.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "1.1.1.2 Disable Mounting of freevxfs"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install freevxfs" /etc/modprobe.d/freevxfs.conf ; then
+      sed -i 's#^install freevxfs.*#install freevxfs /bin/false#g' /etc/modprobe.d/freevxfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/freevxfs.conf
+      echo "install freevxfs /bin/false" >> /etc/modprobe.d/freevxfs.conf
+   fi
+   #
+   if ! LC_ALL=C grep -q -m 1 "^blacklist freevxfs$" /etc/modprobe.d/freevxfs.conf ; then
+      echo "blacklist freevxfs" >> /etc/modprobe.d/freevxfs.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "1.1.1.3 Disable Mounting of hfs"
+emediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install hfs" /etc/modprobe.d/hfs.conf ; then
+      sed -i 's#^install hfs.*#install hfs /bin/false#g' /etc/modprobe.d/hfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/hfs.conf
+      echo "install hfs /bin/false" >> /etc/modprobe.d/hfs.conf
+   fi
+   #
+   if ! LC_ALL=C grep -q -m 1 "^blacklist hfs$" /etc/modprobe.d/hfs.conf ; then
+      echo "blacklist hfs" >> /etc/modprobe.d/hfs.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "1.1.1.4 Disable Mounting of hfsplus"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install hfsplus" /etc/modprobe.d/hfsplus.conf ; then
+      sed -i 's#^install hfsplus.*#install hfsplus /bin/false#g' /etc/modprobe.d/hfsplus.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/hfsplus.conf
+      echo "install hfsplus /bin/false" >> /etc/modprobe.d/hfsplus.conf
+   fi
+   #
+   if ! LC_ALL=C grep -q -m 1 "^blacklist hfsplus$" /etc/modprobe.d/hfsplus.conf ; then
+      echo "blacklist hfsplus" >> /etc/modprobe.d/hfsplus.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "1.1.1.5 Disable Mounting of jffs2"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install jffs2" /etc/modprobe.d/jffs2.conf ; then
+      sed -i 's#^install jffs2.*#install jffs2 /bin/false#g' /etc/modprobe.d/jffs2.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/jffs2.conf
+      echo "install jffs2 /bin/false" >> /etc/modprobe.d/jffs2.conf
+   fi
+   #
+   if ! LC_ALL=C grep -q -m 1 "^blacklist jffs2$" /etc/modprobe.d/jffs2.conf ; then
+      echo "blacklist jffs2" >> /etc/modprobe.d/jffs2.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "1.1.1.8 Disable Modprobe Loading of USB Storage Driver"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if LC_ALL=C grep -q -m 1 "^install usb-storage" /etc/modprobe.d/usb-storage.conf ; then
+      sed -i 's#^install usb-storage.*#install usb-storage /bin/false#g' /etc/modprobe.d/usb-storage.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/usb-storage.conf
+      echo "install usb-storage /bin/false" >> /etc/modprobe.d/usb-storage.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist usb-storage$" /etc/modprobe.d/usb-storage.conf ; then
+      echo "blacklist usb-storage" >> /etc/modprobe.d/usb-storage.conf
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo "1.1.2.3.2 Add nodev Option to /home"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/home" > /dev/null || findmnt --fstab "/home" > /dev/null; }; then
+   #
+   function perform_remediation {
+      #  
+      # the mount point /home has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/home")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab \
+        || { echo "The mount point '/home' is not even in /etc/fstab, so we can't set up mount options" >&2;
+                echo "Not remediating, because there is no record of /home in /etc/fstab" >&2; return 1; }
+    
+
+
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /home)"
+
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 | awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /home  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         #
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/home"; then
+         if mountpoint -q "/home"; then
+            systemctl daemon-reload
+            mount -o remount --target "/home"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.3.3 Add nosuid Option to /home"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/home" > /dev/null || findmnt --fstab "/home" > /dev/null; }; then
+   #
+   function perform_remediation {
+      #  
+      # the mount point /home has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/home")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/home' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /home in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /home)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /home  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/home"; then
+         if mountpoint -q "/home"; then
+            systemctl daemon-reload
+            mount -o remount --target "/home"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.7.2 Add nodev Option to /var/log/audit"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # 
+       # the mount point /var/log/audit has to be defined in /etc/fstab
+       # before this remediation can be executed. In case it is not defined, the
+       # remediation aborts and no changes regarding the mount point are done.
+       mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+       #
+       grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}'  | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      # 
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.7.4 Add noexec Option to /var/log/audit"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var/log/audit has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab  || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.7.3 Add nosuid Option to /var/log/audit"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var/log/audit has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab  || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+          # runtime opts without some automatic kernel/userspace-added defaults
+          previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.6.3 Add nodev Option to /var/log"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab  || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.6.4 Add noexec Option to /var/log"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab  || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.6.3 Add nosuid Option to /var/log"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.4.2 Add nodev Option to /var"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var" > /dev/null || findmnt --fstab "/var" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var"; then
+         if mountpoint -q "/var"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo "1.1.2.4.3 Add nosuid Option to /var"
+# Remediation is applicable only in certain platforms
+if ( ! ( { rpm --quiet -q kernel ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel "/var" > /dev/null || findmnt --fstab "/var" > /dev/null; }; then
+   #
+   function perform_remediation {
+      # the mount point /var has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var in /etc/fstab" >&2; return 1; }
+      # 
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      #
+      if mkdir -p "/var"; then
+         if mountpoint -q "/var"; then
+            systemctl daemon-reload
+            mount -o remount --target "/var"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
