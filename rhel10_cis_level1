@@ -166,7 +166,7 @@ echo "5.2.5 5.2.6 Require Re-Authentication When Using the sudo Command"
 test -d /etc/sudoers.d || mkdir -p /etc/sudoers.d
 if rpm --quiet -q sudo; then
    var_sudo_timestamp_timeout='5'
-   if grep -Px '^[\s]*Defaults.*timestamp_timeout[\s]*=.*' /etc/sudoers.d/*; then
+   if grep -Px '^[\s]*Defaults.*timestamp_timeout[\s]*=.*' /etc/sudoers.d/* 2>/dev/null; then
      find /etc/sudoers.d/ -type f -exec sed -Ei "/^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=.*/d" {} \;
    fi
    if /usr/sbin/visudo -qcf /etc/sudoers; then
@@ -203,7 +203,9 @@ echo "1.7.2 Ensure Local Login Warning Banner Is Configured Properly..."
 # Remediation is applicable only in certain platforms
 if rpm --quiet -q kernel; then
    cis_banner_text='Authorized users only. All activity may be monitored and reported.'
-   echo "$cis_banner_text" > "/etc/issue"
+   grep -q "$cis_banner_text" "/etc/issue" && echo Warning banner already set, nothing was done
+   grep -q "$cis_banner_text" "/etc/issue" || echo "$cis_banner_text" > "/etc/issue"
+
 else
    >&2 echo 'Remediation is not applicable, nothing was done'
 fi
@@ -214,7 +216,8 @@ echo "1.7.3 Ensure Remote Login Warning Banner Is Configured Properly..."
 # Remediation is applicable only in certain platforms
 if rpm --quiet -q kernel; then
    cis_banner_text='Authorized users only. All activity may be monitored and reported.'
-   echo "$cis_banner_text" > "/etc/issue.net"
+   grep -q "$cis_banner_text" "/etc/issue.net" && echo Warning banner already set, nothing was done
+   grep -q "$cis_banner_text" "/etc/issue.net" || echo "$cis_banner_text" > "/etc/issue.net"
 else
    >&2 echo 'Remediation is not applicable, nothing was done'
 fi
