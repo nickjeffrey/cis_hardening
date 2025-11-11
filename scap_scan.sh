@@ -96,9 +96,9 @@ fi
 oscap info --fetch-remote-resources --profile $scap_profile $datastream_file
 
 # sample output from above command
- Title: CIS Red Hat Enterprise Linux 10 Benchmark for Level 1 - Server Id: xccdf_org.ssgproject.content_profile_cis_server_l1
- Title: Standard System Security Profile for Oracle Linux 9            Id: xccdf_org.ssgproject.content_profile_standard  (cannot find CIS profile for Oracle Linux)
- Title: CIS Ubuntu Linux 24.04 LTS Benchmark for Level 1 - Server      Id: xccdf_org.ssgproject.content_profile_cis_level1_server
+# Title: CIS Red Hat Enterprise Linux 10 Benchmark for Level 1 - Server Id: xccdf_org.ssgproject.content_profile_cis_server_l1
+# Title: Standard System Security Profile for Oracle Linux 9            Id: xccdf_org.ssgproject.content_profile_standard  (cannot find CIS profile for Oracle Linux)
+# Title: CIS Ubuntu Linux 24.04 LTS Benchmark for Level 1 - Server      Id: xccdf_org.ssgproject.content_profile_cis_level1_server
 
 
 # perform a compliance scan, saving the results to XML results file and HTML report file
