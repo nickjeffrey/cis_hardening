@@ -47,31 +47,32 @@ fi
 # get a list of all profiles in the datastream file, CIS level 1, CIS level 2, HIPAA, DISA STIG, etc
 # Figure out which datastream file to use 
 datastream_file="unknown"
-cat /etc/os-release | grep PRETTY_NAME | grep "Debian GNU/Linux 11"         && datastream_file=/usr/share/xml/scap/ssg/content/ssg-debian11-ds.xml   && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Debian GNU/Linux 12"         && datastream_file=/usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml   && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 24.04"                && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 26.04"                && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ubuntu2604-ds.xml && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 28.04"                && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ubuntu2804-ds.xml && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 8"             && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs8-ds.xml        && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 9"             && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs9-ds.xml        && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 10"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs10-ds.xml       && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 11"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs11-ds.xml       && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 12"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs12-ds.xml       && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 8"  && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel8-ds.xml      && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
-cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 9"  && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml      && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
-cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 10" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel10-ds.xml     && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
-cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 11" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel11-ds.xml     && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
-cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 12" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel12-ds.xml     && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
-cat /etc/os-release | grep PRETTY_NAME | grep "Fedora"                      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-fedora-ds.xml     && scap_profile=unknown 
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 8"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol8-ds.xml        && scap_profile=xccdf_org.ssgproject.content_profile_standard 
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 9"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol9-ds.xml        && scap_profile=xccdf_org.ssgproject.content_profile_standard 
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 10"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol10-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_ospp 
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 11"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol11-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_standard  
-cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 12"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol12-ds.xml       && scap_profile=xccdf_org.ssgproject.content_profile_standard 
+cat /etc/os-release | grep PRETTY_NAME | grep "Debian GNU/Linux 11"         && datastream_file=/usr/share/xml/scap/ssg/content/ssg-debian11-ds.xml                       && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "Debian GNU/Linux 12"         && datastream_file=/usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml                       && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 24.04"                && datastream_file=/usr/share/ubuntu-scap-security-guides/1/benchmarks/ssg-ubuntu2404-ds.xml && scap_profile=xccdf_org.ssgproject.content_profile_cis_level1_server 
+cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 26.04"                && datastream_file=/usr/share/ubuntu-scap-security-guides/1/benchmarks/ssg-ubuntu2604-ds.xml && scap_profile=xccdf_org.ssgproject.content_profile_cis_level1_server 
+cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu 28.04"                && datastream_file=/usr/share/ubuntu-scap-security-guides/1/benchmarks/ssg-ubuntu2804-ds.xml && scap_profile=xccdf_org.ssgproject.content_profile_cis_level1_server 
+cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 8"             && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs8-ds.xml                            && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 9"             && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs9-ds.xml                            && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 10"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs10-ds.xml                           && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 11"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs11-ds.xml                           && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "CentOS Stream 12"            && datastream_file=/usr/share/xml/scap/ssg/content/ssg-cs12-ds.xml                           && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 8"  && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel8-ds.xml                          && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
+cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 9"  && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml                          && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
+cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 10" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel10-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
+cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 11" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel11-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
+cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 12" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel12-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
+cat /etc/os-release | grep PRETTY_NAME | grep "Fedora"                      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-fedora-ds.xml                         && scap_profile=unknown 
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 8"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol8-ds.xml                            && scap_profile=xccdf_org.ssgproject.content_profile_standard 
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 9"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol9-ds.xml                            && scap_profile=xccdf_org.ssgproject.content_profile_standard 
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 10"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol10-ds.xml                           && scap_profile=xccdf_org.ssgproject.content_profile_ospp 
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 11"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol11-ds.xml                           && scap_profile=xccdf_org.ssgproject.content_profile_standard  
+cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 12"      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol12-ds.xml                           && scap_profile=xccdf_org.ssgproject.content_profile_standard 
 #
 # Confirm a datastream file was found
 if [ ! -f "$datastream_file" ]; then
    echo ERROR: cannot find datastream file
+   cat /etc/os-release | grep PRETTY_NAME | grep "Ubuntu" && echo NOTE: Ubuntu requires Ubuntu Pro subscription and Ubuntu Security Guide to get the openscap profiles
    exit 1
 fi
 echo Using datastream file $datastream_file
@@ -95,7 +96,9 @@ fi
 oscap info --fetch-remote-resources --profile $scap_profile $datastream_file
 
 # sample output from above command
- Title: Standard System Security Profile for Oracle Linux 9   Id: xccdf_org.ssgproject.content_profile_standard
+ Title: CIS Red Hat Enterprise Linux 10 Benchmark for Level 1 - Server Id: xccdf_org.ssgproject.content_profile_cis_server_l1
+ Title: Standard System Security Profile for Oracle Linux 9            Id: xccdf_org.ssgproject.content_profile_standard  (cannot find CIS profile for Oracle Linux)
+ Title: CIS Ubuntu Linux 24.04 LTS Benchmark for Level 1 - Server      Id: xccdf_org.ssgproject.content_profile_cis_level1_server
 
 
 # perform a compliance scan, saving the results to XML results file and HTML report file
