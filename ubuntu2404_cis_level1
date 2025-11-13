@@ -1,0 +1,3632 @@
+#!/bin/bash
+
+
+
+# CHANGE LOG
+# ----------
+# 2025-11-12    njeffrey    Script created 
+
+
+
+# Enable debugging
+set -x
+
+# Start the security hardening process for Ubuntu 24.04
+echo "Starting security hardening script..."
+
+# Ensure the script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Error: This script must be run as root. Use sudo to run this script." >&2
+    exit 1
+fi
+
+
+
+echo '--------------------------------------'
+echo 6.1.1 Ensure AIDE is installed
+# Advanced Intrusion Detection Environment (AIDE) is a intrusion detection tool that uses predefined rules to check the integrity of
+# files and directories in the Linux operating system. AIDE has its own database to check the integrity of files and directories.
+# Remediation is applicable only in certain platforms
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   DEBIAN_FRONTEND=noninteractive apt install -y "aide"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+#
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   DEBIAN_FRONTEND=noninteractive apt-get install -y "aide"
+   AIDE_CONFIG=/etc/aide/aide.conf
+   DEFAULT_DB_PATH=/var/lib/aide/aide.db
+   #
+   # Fix db path in the config file, if necessary
+   if ! grep -q '^database=file:' ${AIDE_CONFIG}; then
+      # replace_or_append gets confused by 'database=file' as a key, so should not be used.
+      #replace_or_append "${AIDE_CONFIG}" '^database=file' "${DEFAULT_DB_PATH}" '@CCENUM@' '%s:%s'
+      echo "database=file:${DEFAULT_DB_PATH}" >> ${AIDE_CONFIG}
+   fi
+   # Fix db out path in the config file, if necessary
+   if ! grep -q '^database_out=file:' ${AIDE_CONFIG}; then
+      echo "database_out=file:${DEFAULT_DB_PATH}.new" >> ${AIDE_CONFIG}
+   fi
+   /usr/sbin/aideinit -y -f
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure Sudo Logfile Exists - sudo logfile
+echo xccdf_org.ssgproject.content_rule_sudo_custom_logfile
+# Remediation is applicable only in certain platforms
+test -f /var/log/sudo.log || touch /var/log/sudo.log
+if dpkg-query --show --showformat='${db:Status-Status}' 'sudo' 2>/dev/null | grep -q '^installed$'; then
+   var_sudo_logfile='/var/log/sudo.log'
+   if /usr/sbin/visudo -qcf /etc/sudoers; then
+      cp /etc/sudoers /etc/sudoers.bak
+      if ! grep -P '^[\s]*Defaults\b[^!\n]*\blogfile\s*=\s*(?:"?([^",\s]+)"?).*$' /etc/sudoers; then
+         # sudoers file doesn't define Option logfile
+         echo "Defaults logfile=${var_sudo_logfile}" >> /etc/sudoers
+      else
+         # sudoers file defines Option logfile, remediate if appropriate value is not set
+         if ! grep -P "^[\s]*Defaults.*\blogfile=${var_sudo_logfile}\b.*$" /etc/sudoers; then
+            escaped_variable=${var_sudo_logfile//$'/'/$'\/'}
+            sed -Ei "s/(^[\s]*Defaults.*\blogfile=)[-]?.+(\b.*$)/\1$escaped_variable\2/" /etc/sudoers
+         fi
+      fi
+      # Check validity of sudoers and cleanup bak
+      if /usr/sbin/visudo -qcf /etc/sudoers; then
+         rm -f /etc/sudoers.bak
+      else
+         echo "Fail to validate remediated /etc/sudoers, reverting to original file."
+         mv /etc/sudoers.bak /etc/sudoers
+         false
+      fi
+   else
+      echo "Skipping remediation, /etc/sudoers failed to validate"
+      false
+   fi
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Require Re-Authentication When Using the sudo Command
+echo xccdf_org.ssgproject.content_rule_sudo_require_reauthentication
+if dpkg-query --show --showformat='${db:Status-Status}' 'sudo' 2>/dev/null | grep -q '^installed$'; then
+   var_sudo_timestamp_timeout='15'
+   if grep -Px '^[\s]*Defaults.*timestamp_timeout[\s]*=.*' /etc/sudoers.d/*; then
+      find /etc/sudoers.d/ -type f -exec sed -Ei "/^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=.*/d" {} \;
+   fi
+   if /usr/sbin/visudo -qcf /etc/sudoers; then
+      cp /etc/sudoers /etc/sudoers.bak
+      if ! grep -P '^[\s]*Defaults.*timestamp_timeout[\s]*=[\s]*[-]?\w+.*$' /etc/sudoers; then
+         # sudoers file doesn't define Option timestamp_timeout
+         echo "Defaults timestamp_timeout=${var_sudo_timestamp_timeout}" >> /etc/sudoers
+      else
+         # sudoers file defines Option timestamp_timeout, remediate wrong values if present
+         if grep -qP "^[\s]*Defaults\s.*\btimestamp_timeout[\s]*=[\s]*(?!${var_sudo_timestamp_timeout}\b)[-]?\w+\b.*$" /etc/sudoers; then
+            sed -Ei "s/(^[[:blank:]]*Defaults.*timestamp_timeout[[:blank:]]*=)[[:blank:]]*[-]?\w+(.*$)/\1${var_sudo_timestamp_timeout}\2/" /etc/sudoers
+         fi
+      fi
+      #  
+      # Check validity of sudoers and cleanup bak
+      if /usr/sbin/visudo -qcf /etc/sudoers; then
+        rm -f /etc/sudoers.bak
+     else
+        echo "Fail to validate remediated /etc/sudoers, reverting to original file."
+         mv /etc/sudoers.bak /etc/sudoers
+         false
+      fi
+   else
+      echo "Skipping remediation, /etc/sudoers failed to validate"
+      false
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Verify pam_pwhistory module is activated
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_pwhistory_enabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   if [ -f /usr/bin/authselect ]; then
+      if authselect list-features sssd | grep -q with-pwhistory; then
+         if ! authselect check; then
+            echo "authselect integrity check failed. Remediation aborted!"
+            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            exit 1
+         fi
+         authselect enable-feature with-pwhistory
+         authselect apply-changes -b
+      else
+         if ! authselect check; then
+            echo "authselect integrity check failed. Remediation aborted!"
+            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+            exit 1
+         fi
+         CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
+         # If not already in use, a custom profile is created preserving the enabled features.
+         if [[ ! $CURRENT_PROFILE == custom/* ]]; then
+            ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
+            # The "local" profile does not contain essential security features required by multiple Benchmarks.
+            # If currently used, it is replaced by "sssd", which is the best option in this case.
+            if [[ $CURRENT_PROFILE == local ]]; then
+               CURRENT_PROFILE="sssd"
+            fi
+            authselect create-profile hardening -b $CURRENT_PROFILE
+            CURRENT_PROFILE="custom/hardening"
+            authselect apply-changes -b --backup=before-hardening-custom-profile
+            authselect select $CURRENT_PROFILE
+            for feature in $ENABLED_FEATURES; do
+               authselect enable-feature $feature;
+            done
+            authselect apply-changes -b --backup=after-hardening-custom-profile
+         fi
+         PAM_FILE_NAME=$(basename "cac_pwhistory")
+         PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+
+         authselect apply-changes -b
+        
+         if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
+            # Line matching group + control + module was not found. Check group + module.
+            if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
+               # The control is updated only if one single line matches.
+               sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1requisite \2/" "$PAM_FILE_PATH"
+            else
+               echo "password    requisite    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+            fi
+         fi
+      fi
+   else
+      conf_name=cac_pwhistory
+      conf_path="/usr/share/pam-configs"
+
+      if [ ! -f "$conf_path"/"$conf_name" ]; then
+         cat << EOF > "$conf_path"/"$conf_name"
+Name: pwhistory password history checking
+Default: yes
+Priority: 1024
+Password-Type: Primary
+Password: requisite pam_pwhistory.so remember=24 enforce_for_root try_first_pass use_authtok
+Password-Initial: requisite pam_pwhistory.so remember=24 enforce_for_root try_first_pass
+EOF
+      fi
+      DEBIAN_FRONTEND=noninteractive pam-auth-update
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Lock Accounts After Failed Password Attempts
+echo xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_deny
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_passwords_pam_faillock_deny='4'
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo "authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature with-faillock
+      authselect apply-changes -b
+   else
+      conf_name=cac_faillock
+      if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Enable pam_faillock to deny access
+Default: yes
+Conflicts: faillock
+Priority: 0
+Auth-Type: Primary
+Auth:
+    [default=die]                   pam_faillock.so authfail
+    sufficient                      pam_faillock.so authsucc
+EOF
+      fi
+      if [ ! -f /usr/share/pam-configs/"$conf_name"_notify ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"_notify
+Name: Notify of failed login attempts and reset count upon success
+Default: yes
+Conflicts: faillock_notify
+Priority: 1025
+Auth-Type: Primary
+Auth:
+    requisite                       pam_faillock.so preauth
+Account-Type: Primary
+Account:
+    required                        pam_faillock.so
+EOF
+      fi
+      DEBIAN_FRONTEND=noninteractive pam-auth-update
+   fi
+   AUTH_FILES=("/etc/pam.d/common-auth")
+   SKIP_FAILLOCK_CHECK=true
+   FAILLOCK_CONF="/etc/security/faillock.conf"
+   if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
+      regex="^\s*deny\s*="
+      line="deny = $var_accounts_passwords_pam_faillock_deny"
+      if ! grep -q $regex $FAILLOCK_CONF; then
+         echo $line >> $FAILLOCK_CONF
+      else
+         sed -i --follow-symlinks 's|^\s*\(deny\s*=\s*\)\(\S\+\)|\1'"$var_accounts_passwords_pam_faillock_deny"'|g' $FAILLOCK_CONF
+      fi
+   else
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth.*pam_faillock\.so\s+(preauth|authfail).*deny' "$pam_file"; then
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*preauth.*/ s/$/ deny='"$var_accounts_passwords_pam_faillock_deny"'/' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*authfail.*/ s/$/ deny='"$var_accounts_passwords_pam_faillock_deny"'/' "$pam_file"
+         else
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*preauth.*\)\('"deny"'=\)\S\+\b\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_deny"'\3/' "$pam_file"
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*authfail.*\)\('"deny"'=\)\S\+\b\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_deny"'\3/' "$pam_file"
+         fi
+      done
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure pam_faillock module is enabled
+echo xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_enabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo "authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature with-faillock
+      authselect apply-changes -b
+   else
+      conf_name=cac_faillock
+      if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Enable pam_faillock to deny access
+Default: yes
+Conflicts: faillock
+Priority: 0
+Auth-Type: Primary
+Auth:
+    [default=die]                   pam_faillock.so authfail
+    sufficient                      pam_faillock.so authsucc
+EOF
+      fi
+      if [ ! -f /usr/share/pam-configs/"$conf_name"_notify ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"_notify
+Name: Notify of failed login attempts and reset count upon success
+Default: yes
+Conflicts: faillock_notify
+Priority: 1025
+Auth-Type: Primary
+Auth:
+    requisite                       pam_faillock.so preauth
+Account-Type: Primary
+Account:
+    required                        pam_faillock.so
+EOF
+      fi
+      DEBIAN_FRONTEND=noninteractive pam-auth-update
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set Lockout Time for Failed Password Attempts
+echo xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_unlock_time
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_passwords_pam_faillock_unlock_time='900'
+   if [ -f /usr/bin/authselect ]; then
+      if ! authselect check; then
+         echo "authselect integrity check failed. Remediation aborted!"
+         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
+         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
+         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
+         exit 1
+      fi
+      authselect enable-feature with-faillock
+      authselect apply-changes -b
+   else
+      conf_name=cac_faillock
+      if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Enable pam_faillock to deny access
+Default: yes
+Conflicts: faillock
+Priority: 0
+Auth-Type: Primary
+Auth:
+    [default=die]                   pam_faillock.so authfail
+    sufficient                      pam_faillock.so authsucc
+EOF
+      fi
+      if [ ! -f /usr/share/pam-configs/"$conf_name"_notify ]; then
+         cat << EOF > /usr/share/pam-configs/"$conf_name"_notify
+Name: Notify of failed login attempts and reset count upon success
+Default: yes
+Conflicts: faillock_notify
+Priority: 1025
+Auth-Type: Primary
+Auth:
+    requisite                       pam_faillock.so preauth
+Account-Type: Primary
+Account:
+    required                        pam_faillock.so
+EOF
+      fi
+      DEBIAN_FRONTEND=noninteractive pam-auth-update
+   fi
+   AUTH_FILES=("/etc/pam.d/common-auth")
+   SKIP_FAILLOCK_CHECK=true
+   FAILLOCK_CONF="/etc/security/faillock.conf"
+   if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
+      regex="^\s*unlock_time\s*="
+      line="unlock_time = $var_accounts_passwords_pam_faillock_unlock_time"
+      if ! grep -q $regex $FAILLOCK_CONF; then
+         echo $line >> $FAILLOCK_CONF
+      else
+         sed -i --follow-symlinks 's|^\s*\(unlock_time\s*=\s*\)\(\S\+\)|\1'"$var_accounts_passwords_pam_faillock_unlock_time"'|g' $FAILLOCK_CONF
+      fi
+   else
+      for pam_file in "${AUTH_FILES[@]}"
+      do
+         if ! grep -qE '^\s*auth.*pam_faillock\.so\s+(preauth|authfail).*unlock_time' "$pam_file"; then
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*preauth.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/' "$pam_file"
+            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*authfail.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/' "$pam_file"
+         else
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*preauth.*\)\('"unlock_time"'=\)\S\+\b\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/' "$pam_file"
+            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*authfail.*\)\('"unlock_time"'=\)\S\+\b\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/' "$pam_file"
+         fi
+      done
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Install pam_pwquality Package
+echo xccdf_org.ssgproject.content_rule_package_pam_pwquality_installed
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   DEBIAN_FRONTEND=noninteractive apt-get install -y "libpam-pwquality"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Digit Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_dcredit
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_dcredit='-1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^dcredit")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_dcredit"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^dcredit\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^dcredit\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Prevent the Use of Dictionary Words
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_dictcheck
+# Remediation is applicable only in certain platforms
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_dictcheck='1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^dictcheck")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_dictcheck"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^dictcheck\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^dictcheck\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Different Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_difok
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_difok='2'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^difok")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_difok"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^difok\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^difok\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Enforce for root User
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_enforce_root
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   if [ -e "/etc/security/pwquality.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*enforce_for_root/Id" "/etc/security/pwquality.conf"
+   else
+      touch "/etc/security/pwquality.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/security/pwquality.conf"
+   cp "/etc/security/pwquality.conf" "/etc/security/pwquality.conf.bak"
+   # Insert at the end of the file
+   printf '%s\n' "enforce_for_root" >> "/etc/security/pwquality.conf"
+   # Clean up after ourselves.
+   test -f "/etc/security/pwquality.conf.bak" && rm "/etc/security/pwquality.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Enforcing
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_enforcing
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_enforcing='1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^enforcing")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_enforcing"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^enforcing\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^enforcing\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Lowercase Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_lcredit
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_lcredit='-1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^lcredit")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_lcredit"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^lcredit\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^lcredit\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Set Password Maximum Consecutive Repeating Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_maxrepeat
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_maxrepeat='3'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^maxrepeat")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_maxrepeat"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^maxrepeat\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^maxrepeat\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Limit the maximum number of sequential characters in passwords
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_maxsequence
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_maxsequence='3'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^maxsequence")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_maxsequence"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^maxsequence\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^maxsequence\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Different Categories
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_minclass
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_minclass='4'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^minclass")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_minclass"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^minclass\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^minclass\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Length
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_minlen
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_minlen='14'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^minlen")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_minlen"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^minlen\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^minlen\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Special Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_ocredit
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_ocredit='-1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^ocredit")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_ocredit"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^ocredit\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^ocredit\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Verify pam_pwquality module is activated
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_pwquality_enabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure PAM Enforces Password Requirements - Minimum Uppercase Characters
+echo xccdf_org.ssgproject.content_rule_accounts_password_pam_ucredit
+# Remediation is applicable only in certain platforms
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpwquality1' 2>/dev/null | grep -q '^installed$'; then
+   var_password_pam_ucredit='-1'
+   conf_name=cac_pwquality
+   if [ ! -f /usr/share/pam-configs/"$conf_name" ]; then
+      cat << EOF > /usr/share/pam-configs/"$conf_name"
+Name: Pwquality password strength checking
+Default: yes
+Priority: 1025
+Conflicts: cracklib, pwquality
+Password-Type: Primary
+Password:
+    requisite                   pam_pwquality.so
+EOF
+   fi
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^ucredit")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$var_password_pam_ucredit"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^ucredit\\>" "/etc/security/pwquality.conf"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^ucredit\\>.*/$escaped_formatted_output/gi" "/etc/security/pwquality.conf"
+   else
+      if [[ -s "/etc/security/pwquality.conf" ]] && [[ -n "$(tail -c 1 -- "/etc/security/pwquality.conf" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/security/pwquality.conf"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/security/pwquality.conf"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set Account Expiration Following Inactivity
+echo xccdf_org.ssgproject.content_rule_account_disable_post_pw_expiration
+if dpkg-query --show --showformat='${db:Status-Status}' 'login' 2>/dev/null | grep -q '^installed$'; then
+   var_account_disable_post_pw_expiration='45'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^INACTIVE")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s=%s" "$stripped_key" "$var_account_disable_post_pw_expiration"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^INACTIVE\\>" "/etc/default/useradd"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^INACTIVE\\>.*/$escaped_formatted_output/gi" "/etc/default/useradd"
+   else
+      if [[ -s "/etc/default/useradd" ]] && [[ -n "$(tail -c 1 -- "/etc/default/useradd" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/default/useradd"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/default/useradd"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Set Password Maximum Age
+echo xccdf_org.ssgproject.content_rule_accounts_maximum_age_login_defs
+if dpkg-query --show --showformat='${db:Status-Status}' 'login' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_maximum_age_login_defs='365'
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^PASS_MAX_DAYS")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$var_accounts_maximum_age_login_defs"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^PASS_MAX_DAYS\\>" "/etc/login.defs"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^PASS_MAX_DAYS\\>.*/$escaped_formatted_output/gi" "/etc/login.defs"
+   else
+      if [[ -s "/etc/login.defs" ]] && [[ -n "$(tail -c 1 -- "/etc/login.defs" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/login.defs"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/login.defs"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Set Existing Passwords Maximum Age
+echo xccdf_org.ssgproject.content_rule_accounts_password_set_max_life_existing
+var_accounts_maximum_age_login_defs='365'
+while IFS= read -r i; do
+   chage -M $var_accounts_maximum_age_login_defs $i
+done <   <(awk -v var="$var_accounts_maximum_age_login_defs" -F: '(/^[^:]+:[^!*]/ && ($5 > var || $5 == "")) {print $1}' /etc/shadow)
+
+
+
+echo '--------------------------------------'
+echo Prevent Login to Accounts With Empty Password
+echo xccdf_org.ssgproject.content_rule_no_empty_passwords_unix
+if ( dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$' && dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$' ); then
+   conf_name=cac_unix
+   conf_path="/usr/share/pam-configs"
+   if [ ! -f "$conf_path"/"$conf_name" ]; then
+      if [ -f "$conf_path"/unix ]; then
+         if grep -q "$(md5sum "$conf_path"/unix | cut -d ' ' -f 1)" /var/lib/dpkg/info/libpam-runtime.md5sums;then
+            cp "$conf_path"/unix "$conf_path"/"$conf_name"
+            sed -i 's/Priority: [0-9]\+/Priority: 257\
+Conflicts: unix/' "$conf_path"/"$conf_name"
+            DEBIAN_FRONTEND=noninteractive pam-auth-update
+         else
+            echo "Not applicable - checksum of $conf_path/unix does not match the original." >&2
+         fi
+      else
+         echo "Not applicable - $conf_path/unix does not exist" >&2
+      fi
+   fi
+   config_file="/usr/share/pam-configs/cac_unix"
+   sed -i '/pam_unix\.so/s/nullok//g' "$config_file"
+   DEBIAN_FRONTEND=noninteractive pam-auth-update
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure the Group Used by pam_wheel.so Module Exists on System and is Empty
+echo xccdf_org.ssgproject.content_rule_ensure_pam_wheel_group_empty
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   var_pam_wheel_group_for_su='sugroup'
+   if ! grep -q "^${var_pam_wheel_group_for_su}:[^:]*:[^:]*:[^:]*" /etc/group; then
+      groupadd ${var_pam_wheel_group_for_su}
+   fi
+   # group must be empty
+   gpasswd -M '' ${var_pam_wheel_group_for_su}
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Enforce Usage of pam_wheel with Group Parameter for su Authentication
+echo xccdf_org.ssgproject.content_rule_use_pam_wheel_group_for_su
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   var_pam_wheel_group_for_su='sugroup'
+   PAM_CONF=/etc/pam.d/su
+   pamstr=$(grep -P '^auth\s+required\s+pam_wheel\.so\s+(?=[^#]*\buse_uid\b)(?=[^#]*\bgroup=)' ${PAM_CONF})
+   if [ -z "$pamstr" ]; then
+      sed -Ei '/^auth\b.*\brequired\b.*\bpam_wheel\.so/d' ${PAM_CONF} # remove any remaining uncommented pam_wheel.so line
+      sed -Ei "/^auth\s+sufficient\s+pam_rootok\.so.*$/a auth             required        pam_wheel.so use_uid group=${var_pam_wheel_group_for_su}" ${PAM_CONF}
+   else
+      group_val=$(echo -n "$pamstr" | grep -Eo '\bgroup=[_a-z][-0-9_a-z]*' | cut -d '=' -f 2)
+      if [ -z "${group_val}" ] || [ ${group_val} != ${var_pam_wheel_group_for_su} ]; then
+         sed -Ei "s/(^auth\s+required\s+pam_wheel.so\s+[^#]*group=)[_a-z][-0-9_a-z]*/\1${var_pam_wheel_group_for_su}/" ${PAM_CONF}
+      fi
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure the Default Bash Umask is Set Correctly
+echo xccdf_org.ssgproject.content_rule_accounts_umask_etc_bashrc
+if dpkg-query --show --showformat='${db:Status-Status}' 'bash' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_user_umask='027'
+   grep -q "^[^#]*\bumask" /etc/bash.bashrc && \
+   sed -i -E -e "s/^([^#]*\bumask)[[:space:]]+[[:digit:]]+/\1 $var_accounts_user_umask/g" /etc/bash.bashrc
+   if ! [ $? -eq 0 ]; then
+      echo "umask $var_accounts_user_umask" >> /etc/bash.bashrc
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure the Default Umask is Set Correctly in login.defs
+echo xccdf_org.ssgproject.content_rule_accounts_umask_etc_login_defs
+if dpkg-query --show --showformat='${db:Status-Status}' 'login' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_user_umask='027'
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^UMASK")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$var_accounts_user_umask"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^UMASK\\>" "/etc/login.defs"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^UMASK\\>.*/$escaped_formatted_output/gi" "/etc/login.defs"
+   else
+      if [[ -s "/etc/login.defs" ]] && [[ -n "$(tail -c 1 -- "/etc/login.defs" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/login.defs"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/login.defs"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure the Default Umask is Set Correctly in /etc/profile
+echo xccdf_org.ssgproject.content_rule_accounts_umask_etc_profile
+var_accounts_user_umask='027'
+readarray -t profile_files < <(find /etc/profile.d/ -type f -name '*.sh' -or -name 'sh.local')
+for file in "${profile_files[@]}" /etc/profile; do
+   grep -qE '^[^#]*umask' "$file" && sed -i -E "s/^(\s*umask\s*)[0-7]+/\1$var_accounts_user_umask/g" "$file"
+done
+if ! grep -qrE '^[^#]*umask' /etc/profile*; then
+   echo "umask $var_accounts_user_umask" >> /etc/profile
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Set Interactive Session Timeout
+echo xccdf_org.ssgproject.content_rule_accounts_tmout
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   var_accounts_tmout='900'
+   #
+   # if 0, no occurence of tmout found, if 1, occurence found
+   tmout_found=0
+   for f in /etc/bash.bashrc /etc/profile /etc/profile.d/*.sh; do
+      if grep --silent '^\s*TMOUT' $f; then
+         sed -i -E "s/^(\s*)TMOUT\s*=\s*(\w|\$)*(.*)$/\1TMOUT=$var_accounts_tmout\3/g" $f
+         tmout_found=1
+         if ! grep --silent '^\s*readonly TMOUT' $f ; then
+            echo "readonly TMOUT" >> $f
+         fi
+         if ! grep --silent '^\s*export TMOUT' $f ; then
+            echo "export TMOUT" >> $f
+         fi
+      fi
+   done
+   OLD_UMASK=$(umask)
+   umask u=rw,go=r  
+   if [ $tmout_found -eq 0 ]; then
+      echo -e "\n# Set TMOUT to $var_accounts_tmout per security requirements" >> /etc/profile.d/tmout.sh
+      echo "TMOUT=$var_accounts_tmout" >> /etc/profile.d/tmout.sh
+      echo "readonly TMOUT" >> /etc/profile.d/tmout.sh
+      echo "export TMOUT" >> /etc/profile.d/tmout.sh
+   fi
+   umask $OLD_UMASK
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Ensure All User Initialization Files Have Mode 0740 Or Less Permissive
+echo xccdf_org.ssgproject.content_rule_file_permission_user_init_files
+var_user_initialization_files_regex='^\.[\w\- ]+$'
+readarray -t interactive_users < <(awk -F: '$3>=1000   {print $1}' /etc/passwd)
+readarray -t interactive_users_home < <(awk -F: '$3>=1000   {print $6}' /etc/passwd)
+readarray -t interactive_users_shell < <(awk -F: '$3>=1000   {print $7}' /etc/passwd)
+USERS_IGNORED_REGEX='nobody|nfsnobody'
+for (( i=0; i<"${#interactive_users[@]}"; i++ )); do
+   if ! grep -qP "$USERS_IGNORED_REGEX" <<< "${interactive_users[$i]}" && [ "${interactive_users_shell[$i]}" != "/sbin/nologin" ]; then
+      readarray -t init_files < <(find "${interactive_users_home[$i]}" -maxdepth 1 -exec basename {} \; | grep -P "$var_user_initialization_files_regex")
+     for file in "${init_files[@]}"; do
+        chmod u-s,g-wxs,o= "${interactive_users_home[$i]}/$file"
+     done
+  fi
+done
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure AppArmor is enabled in the bootloader configuration
+echo xccdf_org.ssgproject.content_rule_grub2_enable_apparmor
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ]; then
+   # Correct the form of default kernel command line in GRUB
+   if grep -q '^\s*GRUB_CMDLINE_LINUX=.*apparmor=.*"'  '/etc/default/grub' ; then
+      # modify the GRUB command-line if an apparmor= arg already exists
+      sed -i "s/\(^\s*GRUB_CMDLINE_LINUX=\".*\)apparmor=[^[:space:]]\+\(.*\"\)/\1apparmor=1\2/"  '/etc/default/grub'
+      # Add to already existing GRUB_CMDLINE_LINUX parameters
+   elif grep -q '^\s*GRUB_CMDLINE_LINUX='  '/etc/default/grub' ; then
+      # no apparmor=arg is present, append it
+      sed -i "s/\(^\s*GRUB_CMDLINE_LINUX=\".*\)\"/\1 apparmor=1\"/"  '/etc/default/grub'
+      # Add GRUB_CMDLINE_LINUX parameters line
+   else
+      echo "GRUB_CMDLINE_LINUX=\"apparmor=1\"" >> '/etc/default/grub'
+   fi
+   # Correct the form of default kernel command line in GRUB
+   if grep -q '^\s*GRUB_CMDLINE_LINUX=.*security=.*"'  '/etc/default/grub' ; then
+      # modify the GRUB command-line if an security= arg already exists
+      sed -i "s/\(^\s*GRUB_CMDLINE_LINUX=\".*\)security=[^[:space:]]\+\(.*\"\)/\1security=apparmor\2/"  '/etc/default/grub'
+      # Add to already existing GRUB_CMDLINE_LINUX parameters
+   elif grep -q '^\s*GRUB_CMDLINE_LINUX='  '/etc/default/grub' ; then
+      # no security=arg is present, append it
+      sed -i "s/\(^\s*GRUB_CMDLINE_LINUX=\".*\)\"/\1 security=apparmor\"/"  '/etc/default/grub'
+      # Add GRUB_CMDLINE_LINUX parameters line
+   else
+      echo "GRUB_CMDLINE_LINUX=\"security=apparmor\"" >> '/etc/default/grub'
+   fi
+   update-grub
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure journald is configured to send logs to rsyslog
+echo xccdf_org.ssgproject.content_rule_journald_forward_to_syslog
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$' && { ! ( ! (systemctl is-active rsyslog &>/dev/null) ); }; then
+   if [ -e "/etc/systemd/journald.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ForwardToSyslog\s*=\s*/d" "/etc/systemd/journald.conf"
+   else
+      touch "/etc/systemd/journald.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/systemd/journald.conf"
+   #
+   cp "/etc/systemd/journald.conf" "/etc/systemd/journald.conf.bak"
+   # Insert before the line matching the regex '^#\s*ForwardToSyslog'.
+   line_number="$(LC_ALL=C grep -n "^#\s*ForwardToSyslog" "/etc/systemd/journald.conf.bak" | LC_ALL=C sed 's/:.*//g')"
+   if [ -z "$line_number" ]; then
+      # There was no match of '^#\s*ForwardToSyslog', insert at
+      # the end of the file.
+      printf '%s\n' "ForwardToSyslog=yes" >> "/etc/systemd/journald.conf"
+   else
+      head -n "$(( line_number - 1 ))" "/etc/systemd/journald.conf.bak" > "/etc/systemd/journald.conf"
+      printf '%s\n' "ForwardToSyslog=yes" >> "/etc/systemd/journald.conf"
+      tail -n "+$(( line_number ))" "/etc/systemd/journald.conf.bak" >> "/etc/systemd/journald.conf"
+   fi
+   # Clean up after ourselves.
+   test -f "/etc/systemd/journald.conf.bak" && rm "/etc/systemd/journald.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Configure Accepting Router Advertisements on All IPv6 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_all_accept_ra
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.all.accept_ra from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.all.accept_ra.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.all.accept_ra" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv6_conf_all_accept_ra_value='0'
+   #
+   # Set runtime for net.ipv6.conf.all.accept_ra
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.all.accept_ra="$sysctl_net_ipv6_conf_all_accept_ra_value"
+   fi
+   #
+   # If net.ipv6.conf.all.accept_ra present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.all.accept_ra = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.all.accept_ra")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_all_accept_ra_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.all.accept_ra\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.all.accept_ra\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting Source-Routed Packets on all IPv6 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_all_accept_source_route
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.all.accept_source_route from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.all.accept_source_route.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.all.accept_source_route" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv6_conf_all_accept_source_route_value='0'
+   #
+   # Set runtime for net.ipv6.conf.all.accept_source_route
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.all.accept_source_route="$sysctl_net_ipv6_conf_all_accept_source_route_value"
+   fi
+   #
+   # If net.ipv6.conf.all.accept_source_route present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.all.accept_source_route = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.all.accept_source_route")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_all_accept_source_route_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.all.accept_source_route\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.all.accept_source_route\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for IPv6 Forwarding
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_all_forwarding
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.all.forwarding from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.all.forwarding.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.all.forwarding" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv6_conf_all_forwarding_value='0'
+   #
+   # Set runtime for net.ipv6.conf.all.forwarding
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.all.forwarding="$sysctl_net_ipv6_conf_all_forwarding_value"
+   fi
+   #
+   # If net.ipv6.conf.all.forwarding present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.all.forwarding = value" to /etc/sysctl.conf 
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.all.forwarding")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_all_forwarding_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.all.forwarding\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.all.forwarding\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Accepting Router Advertisements on all IPv6 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_default_accept_ra
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.default.accept_ra from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.default.accept_ra.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.default.accept_ra" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value 
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv6_conf_default_accept_ra_value='0'
+   #
+   # Set runtime for net.ipv6.conf.default.accept_ra
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.default.accept_ra="$sysctl_net_ipv6_conf_default_accept_ra_value"
+   fi
+   #
+   # If net.ipv6.conf.default.accept_ra present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.default.accept_ra = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.default.accept_ra")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_default_accept_ra_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.default.accept_ra\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.default.accept_ra\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting Source-Routed Packets on IPv6 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_default_accept_source_route
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.default.accept_source_route from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.default.accept_source_route.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.default.accept_source_route" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value 
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv6_conf_default_accept_source_route_value='0'
+   #
+   # Set runtime for net.ipv6.conf.default.accept_source_route 
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.default.accept_source_route="$sysctl_net_ipv6_conf_default_accept_source_route_value"
+   fi
+   #
+   # If net.ipv6.conf.default.accept_source_route present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.default.accept_source_route = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.default.accept_source_route")
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_default_accept_source_route_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.default.accept_source_route\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.default.accept_source_route\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting Source-Routed Packets on all IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_accept_source_route
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.accept_source_route from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+   # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+   if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.accept_source_route.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.all.accept_source_route" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_all_accept_source_route_value='0'
+   #
+   # Set runtime for net.ipv4.conf.all.accept_source_route
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.accept_source_route="$sysctl_net_ipv4_conf_all_accept_source_route_value"
+   fi
+   #
+   # If net.ipv4.conf.all.accept_source_route present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.all.accept_source_route = value" to /etc/sysctl.conf
+   #
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.accept_source_route")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_all_accept_source_route_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.accept_source_route\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.accept_source_route\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Enable Kernel Parameter to Log Martian Packets on all IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_log_martians
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.log_martians from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.log_martians.*$' $f | uniq )
+         if ! test -z "$matching_list"; then
+            while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.all.log_martians" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_all_log_martians_value='1'
+   #
+   # Set runtime for net.ipv4.conf.all.log_martians
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.log_martians="$sysctl_net_ipv4_conf_all_log_martians_value"
+   fi
+   #
+   # If net.ipv4.conf.all.log_martians present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.all.log_martians = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.log_martians")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_all_log_martians_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.log_martians\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.log_martians\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+Enable Kernel Parameter to Use Reverse Path Filtering on all IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_rp_filter
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.rp_filter from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.rp_filter.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.all.rp_filter" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_all_rp_filter_value='1'
+   #
+   # Set runtime for net.ipv4.conf.all.rp_filter
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.rp_filter="$sysctl_net_ipv4_conf_all_rp_filter_value"
+   fi
+   #
+   # If net.ipv4.conf.all.rp_filter present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.all.rp_filter = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.rp_filter")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_all_rp_filter_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.rp_filter\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.rp_filter\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting Secure ICMP Redirects on all IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_secure_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.secure_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.secure_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry") 
+            # comment out "net.ipv4.conf.all.secure_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf" 
+   sysctl_net_ipv4_conf_all_secure_redirects_value='0'
+   #
+   # Set runtime for net.ipv4.conf.all.secure_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.secure_redirects="$sysctl_net_ipv4_conf_all_secure_redirects_value"
+   fi
+   #
+   # If net.ipv4.conf.all.secure_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.all.secure_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.secure_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_all_secure_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.secure_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.secure_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting Source-Routed Packets on IPv4 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_accept_source_route
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.accept_source_route from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.accept_source_route.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.accept_source_route" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_default_accept_source_route_value='0'
+   #
+   # Set runtime for net.ipv4.conf.default.accept_source_route
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.accept_source_route="$sysctl_net_ipv4_conf_default_accept_source_route_value"
+   fi
+   #
+   # If net.ipv4.conf.default.accept_source_route present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.default.accept_source_route = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.accept_source_route")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_default_accept_source_route_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.accept_source_route\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.accept_source_route\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Enable Kernel Paremeter to Log Martian Packets on all IPv4 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_log_martians
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.log_martians from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.log_martians.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.log_martians" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_default_log_martians_value='1'
+   #
+   # Set runtime for net.ipv4.conf.default.log_martians
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.log_martians="$sysctl_net_ipv4_conf_default_log_martians_value"
+   fi
+   #
+   # If net.ipv4.conf.default.log_martians present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.default.log_martians = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.log_martians")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_default_log_martians_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.log_martians\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.log_martians\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Enable Kernel Parameter to Use Reverse Path Filtering on all IPv4 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_rp_filter
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.rp_filter from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.rp_filter.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.rp_filter" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+  # 
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_default_rp_filter_value='1'
+   #
+   # Set runtime for net.ipv4.conf.default.rp_filter
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.rp_filter="$sysctl_net_ipv4_conf_default_rp_filter_value"
+   fi
+   #
+   # If net.ipv4.conf.default.rp_filter present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.default.rp_filter = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.rp_filter")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_default_rp_filter_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.rp_filter\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.rp_filter\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Configure Kernel Parameter for Accepting Secure Redirects By Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_secure_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.secure_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.secure_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.secure_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_conf_default_secure_redirects_value='0'
+   #
+   # Set runtime for net.ipv4.conf.default.secure_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.secure_redirects="$sysctl_net_ipv4_conf_default_secure_redirects_value"
+   fi
+   #
+   # If net.ipv4.conf.default.secure_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.default.secure_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.secure_redirects")
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_default_secure_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.secure_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.secure_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+ 
+
+
+
+echo '--------------------------------------'
+echo Enable Kernel Parameter to Use TCP Syncookies on Network Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_tcp_syncookies
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.tcp_syncookies from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+     if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+     matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.tcp_syncookies.*$' $f | uniq )
+     if ! test -z "$matching_list"; then
+        while IFS= read -r entry; do
+           escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+           # comment out "net.ipv4.tcp_syncookies" matches to preserve user data
+           sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+        done <<< "$matching_list"
+     fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   sysctl_net_ipv4_tcp_syncookies_value='1'
+   #
+   # Set runtime for net.ipv4.tcp_syncookies
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.tcp_syncookies="$sysctl_net_ipv4_tcp_syncookies_value"
+   fi
+   #
+   # If net.ipv4.tcp_syncookies present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.tcp_syncookies = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.tcp_syncookies")
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_tcp_syncookies_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.tcp_syncookies\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.tcp_syncookies\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Sending ICMP Redirects on all IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_send_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.send_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.send_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.all.send_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for net.ipv4.conf.all.send_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.send_redirects="0"
+   fi
+   #
+   # If net.ipv4.conf.all.send_redirects present in /etc/sysctl.conf, change value to "0"
+   #	else, add "net.ipv4.conf.all.send_redirects = 0" to /etc/sysctl.conf
+   #
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.send_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "0"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.send_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.send_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Sending ICMP Redirects on all IPv4 Interfaces by Default
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_send_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.send_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.send_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.send_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for net.ipv4.conf.default.send_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.send_redirects="0"
+   fi
+   #
+   # If net.ipv4.conf.default.send_redirects present in /etc/sysctl.conf, change value to "0"
+   #	else, add "net.ipv4.conf.default.send_redirects = 0" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.send_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "0"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.send_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.send_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for IP Forwarding on IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.ip_forward from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.ip_forward.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.ip_forward" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for net.ipv4.ip_forward
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.ip_forward="0"
+   fi
+   #
+   # If net.ipv4.ip_forward present in /etc/sysctl.conf, change value to "0"
+   #	else, add "net.ipv4.ip_forward = 0" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.ip_forward")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "0"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.ip_forward\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.ip_forward\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Verify ownership of log files
+echo xccdf_org.ssgproject.content_rule_file_ownerships_var_log
+# see https://workbench.cisecurity.org/benchmarks/18959/tickets/23964
+# regarding sssd and gdm exclusions
+find -P /var/log/ -type f -regextype posix-extended \
+    ! -user root ! -user syslog  \
+    ! -name 'gdm' ! -name 'gdm3' \
+    ! -name 'sssd' ! -name 'SSSD' \
+    ! -name 'auth.log' \
+    ! -name 'messages' \
+    ! -name 'syslog' \
+    ! -path '/var/log/apt/*' \
+    ! -path '/var/log/landscape/*' \
+    ! -path '/var/log/gdm/*' \
+    ! -path '/var/log/gdm3/*' \
+    ! -path '/var/log/sssd/*' \
+    ! -path '/var/log/[bw]tmp*' \
+    ! -path '/var/log/cloud-init.log*' \
+    ! -regex '.*\.journal[~]?' \
+    ! -regex '.*/lastlog(\.[^\/]+)?$' \
+    ! -regex '.*/localmessages(.*)' \
+    ! -regex '.*/secure(.*)' \
+    ! -regex '.*/waagent.log(.*)' \
+    -regex '.*' -exec chown --no-dereference root {} \;
+
+
+
+
+echo '--------------------------------------'
+echo Verify permissions of log files
+echo xccdf_org.ssgproject.content_rule_permissions_local_var_log
+find  /var/log/  -perm /u+xs,g+xws,o+xwrt ! -name 'history.log*' ! -name 'eipp.log.xz*' ! -name '[bw]tmp' ! -name '[bw]tmp.*' ! -name '[bw]tmp-*' ! -name 'lastlog' ! -name 'lastlog.*' ! -name 'cloud-init.log*' ! -name 'localmessages*' ! -name 'waagent.log*' -type f -regextype posix-extended -regex '.*' -exec chmod u-xs,g-xws,o-xwrt {} \;
+
+
+
+echo '--------------------------------------'
+echo Disable Mounting of cramfs
+echo xccdf_org.ssgproject.content_rule_kernel_module_cramfs_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install cramfs" /etc/modprobe.d/cramfs.conf ; then
+      sed -i 's#^install cramfs.*#install cramfs /bin/false#g' /etc/modprobe.d/cramfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/cramfs.conf
+      echo "install cramfs /bin/false" >> /etc/modprobe.d/cramfs.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist cramfs$" /etc/modprobe.d/cramfs.conf ; then
+      echo "blacklist cramfs" >> /etc/modprobe.d/cramfs.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Disable Mounting of freevxfs
+echo xccdf_org.ssgproject.content_rule_kernel_module_freevxfs_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install freevxfs" /etc/modprobe.d/freevxfs.conf ; then
+      sed -i 's#^install freevxfs.*#install freevxfs /bin/false#g' /etc/modprobe.d/freevxfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/freevxfs.conf
+      echo "install freevxfs /bin/false" >> /etc/modprobe.d/freevxfs.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist freevxfs$" /etc/modprobe.d/freevxfs.conf ; then
+      echo "blacklist freevxfs" >> /etc/modprobe.d/freevxfs.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Disable Mounting of hfs
+echo xccdf_org.ssgproject.content_rule_kernel_module_hfs_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install hfs" /etc/modprobe.d/hfs.conf ; then
+      sed -i 's#^install hfs.*#install hfs /bin/false#g' /etc/modprobe.d/hfs.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/hfs.conf
+      echo "install hfs /bin/false" >> /etc/modprobe.d/hfs.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist hfs$" /etc/modprobe.d/hfs.conf ; then
+      echo "blacklist hfs" >> /etc/modprobe.d/hfs.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Mounting of hfsplus
+echo xccdf_org.ssgproject.content_rule_kernel_module_hfsplus_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install hfsplus" /etc/modprobe.d/hfsplus.conf ; then
+      sed -i 's#^install hfsplus.*#install hfsplus /bin/false#g' /etc/modprobe.d/hfsplus.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/hfsplus.conf
+      echo "install hfsplus /bin/false" >> /etc/modprobe.d/hfsplus.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist hfsplus$" /etc/modprobe.d/hfsplus.conf ; then
+      echo "blacklist hfsplus" >> /etc/modprobe.d/hfsplus.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Mounting of jffs2
+echo xccdf_org.ssgproject.content_rule_kernel_module_jffs2_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install jffs2" /etc/modprobe.d/jffs2.conf ; then
+      sed -i 's#^install jffs2.*#install jffs2 /bin/false#g' /etc/modprobe.d/jffs2.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/jffs2.conf
+      echo "install jffs2 /bin/false" >> /etc/modprobe.d/jffs2.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist jffs2$" /etc/modprobe.d/jffs2.conf ; then
+      echo "blacklist jffs2" >> /etc/modprobe.d/jffs2.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Disable Modprobe Loading of USB Storage Driver
+echo xccdf_org.ssgproject.content_rule_kernel_module_usb-storage_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if LC_ALL=C grep -q -m 1 "^install usb-storage" /etc/modprobe.d/usb-storage.conf ; then
+      sed -i 's#^install usb-storage.*#install usb-storage /bin/false#g' /etc/modprobe.d/usb-storage.conf
+   else
+      echo -e "\n# Disable per security requirements" >> /etc/modprobe.d/usb-storage.conf
+      echo "install usb-storage /bin/false" >> /etc/modprobe.d/usb-storage.conf
+   fi
+   if ! LC_ALL=C grep -q -m 1 "^blacklist usb-storage$" /etc/modprobe.d/usb-storage.conf ; then
+      echo "blacklist usb-storage" >> /etc/modprobe.d/usb-storage.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /dev/shm
+echo xccdf_org.ssgproject.content_rule_mount_option_dev_shm_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ); then
+   function perform_remediation {
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /dev/shm)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type="tmpfs"
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo "tmpfs /dev/shm tmpfs defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/dev/shm"; then
+         if mountpoint -q "/dev/shm"; then
+            mount -o remount --target "/dev/shm"
+            systemctl daemon-reload
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Add noexec Option to /dev/shm
+echo xccdf_org.ssgproject.content_rule_mount_option_dev_shm_noexec
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ); then
+   function perform_remediation {
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /dev/shm)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type="tmpfs"
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo "tmpfs /dev/shm tmpfs defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      if mkdir -p "/dev/shm"; then
+         if mountpoint -q "/dev/shm"; then
+            mount -o remount --target "/dev/shm"
+            systemctl daemon-reload
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /dev/shm
+echo xccdf_org.ssgproject.content_rule_mount_option_dev_shm_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ); then
+   function perform_remediation {
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /dev/shm)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type="tmpfs"
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo "tmpfs /dev/shm tmpfs defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/dev/shm"; then
+         if mountpoint -q "/dev/shm"; then
+            mount -o remount --target "/dev/shm"
+            systemctl daemon-reload 
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /home
+echo xccdf_org.ssgproject.content_rule_mount_option_home_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/home" > /dev/null || findmnt --fstab "/home" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /home has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/home")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/home' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /home in /etc/fstab" >&2; return 1; }
+      #
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /home)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+        [ "$previous_mount_opts" ] && previous_mount_opts+=","
+        # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+        # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+        fs_type=""
+        if [  "$fs_type" == "iso9660" ] ; then
+           previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+        fi
+        echo " /home  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+        # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+     elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+        previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+        sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+     fi
+     if mkdir -p "/home"; then
+        if mountpoint -q "/home"; then
+           mount -o remount --target "/home"
+        fi
+     fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /home
+echo xccdf_org.ssgproject.content_rule_mount_option_home_nosuid
+# Remediation is applicable only in certain platforms
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/home" > /dev/null || findmnt --fstab "/home" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /home has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/home")"
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/home' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /home in /etc/fstab" >&2; return 1; }
+      #
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /home)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+        [ "$previous_mount_opts" ] && previous_mount_opts+=","
+        # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+        # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+        fs_type=""
+        if [  "$fs_type" == "iso9660" ] ; then
+           previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+        fi
+        echo " /home  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+        # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+     elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+        previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+        sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+     fi
+     if mkdir -p "/home"; then
+        if mountpoint -q "/home"; then
+           mount -o remount --target "/home"
+        fi
+     fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_tmp_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/tmp" > /dev/null || findmnt --fstab "/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /tmp in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /tmp)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /tmp  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/tmp"; then
+         if mountpoint -q "/tmp"; then
+            mount -o remount --target "/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add noexec Option to /tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_tmp_noexec
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/tmp" > /dev/null || findmnt --fstab "/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /tmp in /etc/fstab" >&2; return 1; }
+      #  
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /tmp)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /tmp  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      if mkdir -p "/tmp"; then
+         if mountpoint -q "/tmp"; then
+            mount -o remount --target "/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_tmp_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/tmp" > /dev/null || findmnt --fstab "/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /tmp in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /tmp)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /tmp  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/tmp"; then
+         if mountpoint -q "/tmp"; then
+            mount -o remount --target "/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /var/log/audit
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log/audit has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      #
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add noexec Option to /var/log/audit
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_noexec
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log/audit has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /var/log/audit
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_audit_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log/audit" > /dev/null || findmnt --fstab "/var/log/audit" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log/audit has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log/audit")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log/audit' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log/audit in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log/audit)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log/audit  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/var/log/audit"; then
+         if mountpoint -q "/var/log/audit"; then
+            mount -o remount --target "/var/log/audit"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /var
+echo xccdf_org.ssgproject.content_rule_mount_option_var_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var" > /dev/null || findmnt --fstab "/var" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var in /etc/fstab" >&2; return 1; }
+      #
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/var"; then
+         if mountpoint -q "/var"; then
+            mount -o remount --target "/var"
+         fi
+      fi
+   }
+   perform_remediation
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /var
+echo xccdf_org.ssgproject.content_rule_mount_option_var_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var" > /dev/null || findmnt --fstab "/var" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/var"; then
+         if mountpoint -q "/var"; then
+            mount -o remount --target "/var"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /var/log
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add noexec Option to /var/log
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_noexec
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+Add nosuid Option to /var/log
+echo xccdf_org.ssgproject.content_rule_mount_option_var_log_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/log" > /dev/null || findmnt --fstab "/var/log" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/log has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/log")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/log' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/log in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/log)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/log  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/var/log"; then
+         if mountpoint -q "/var/log"; then
+            mount -o remount --target "/var/log"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nodev Option to /var/tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_var_tmp_nodev
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/tmp" > /dev/null || findmnt --fstab "/var/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/tmp in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/tmp)"
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nodev)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/tmp  defaults,${previous_mount_opts}nodev 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nodev"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nodev|" /etc/fstab
+      fi
+      if mkdir -p "/var/tmp"; then
+         if mountpoint -q "/var/tmp"; then
+            mount -o remount --target "/var/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add noexec Option to /var/tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_var_tmp_noexec
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/tmp" > /dev/null || findmnt --fstab "/var/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/tmp in /etc/fstab" >&2; return 1; }
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/tmp)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|noexec)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/tmp  defaults,${previous_mount_opts}noexec 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "noexec"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,noexec|" /etc/fstab
+      fi
+      if mkdir -p "/var/tmp"; then
+         if mountpoint -q "/var/tmp"; then
+            mount -o remount --target "/var/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Add nosuid Option to /var/tmp
+echo xccdf_org.ssgproject.content_rule_mount_option_var_tmp_nosuid
+if ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) && { findmnt --kernel "/var/tmp" > /dev/null || findmnt --fstab "/var/tmp" > /dev/null; }; then
+   function perform_remediation {
+      # the mount point /var/tmp has to be defined in /etc/fstab
+      # before this remediation can be executed. In case it is not defined, the
+      # remediation aborts and no changes regarding the mount point are done.
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" "/var/tmp")"
+      #
+      grep "$mount_point_match_regexp" -q /etc/fstab || { echo "The mount point '/var/tmp' is not even in /etc/fstab, so we can't set up mount options" >&2; echo "Not remediating, because there is no record of /var/tmp in /etc/fstab" >&2; return 1; }
+      #    
+      mount_point_match_regexp="$(printf "^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]" /var/tmp)"
+      #
+      # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab
+      if ! grep -q "$mount_point_match_regexp" /etc/fstab; then
+         # runtime opts without some automatic kernel/userspace-added defaults
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/mtab | head -1 |  awk '{print $4}' | sed -E "s/(rw|defaults|seclabel|nosuid)(,|$)//g;s/,$//")
+         [ "$previous_mount_opts" ] && previous_mount_opts+=","
+         # In iso9660 filesystems mtab could describe a "blocksize" value, this should be reflected in
+         # fstab as "block".  The next variable is to satisfy shellcheck SC2050.
+         fs_type=""
+         if [  "$fs_type" == "iso9660" ] ; then
+            previous_mount_opts=$(sed 's/blocksize=/block=/' <<< "$previous_mount_opts")
+         fi
+         echo " /var/tmp  defaults,${previous_mount_opts}nosuid 0 0" >> /etc/fstab
+         # If the mount_opt option is not already in the mount point's /etc/fstab entry, add it
+      elif ! grep "$mount_point_match_regexp" /etc/fstab | grep -q "nosuid"; then
+         previous_mount_opts=$(grep "$mount_point_match_regexp" /etc/fstab | awk '{print $4}')
+         sed -i "s|\(${mount_point_match_regexp}.*${previous_mount_opts}\)|\1,nosuid|" /etc/fstab
+      fi
+      if mkdir -p "/var/tmp"; then
+         if mountpoint -q "/var/tmp"; then
+            mount -o remount --target "/var/tmp"
+         fi
+      fi
+   }
+   perform_remediation
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'                                                                                                                                                                                                
+echo Disable Core Dumps for All Users
+echo xccdf_org.ssgproject.content_rule_disable_users_coredumps
+if dpkg-query --show --showformat='${db:Status-Status}' 'libpam-runtime' 2>/dev/null | grep -q '^installed$'; then
+   SECURITY_LIMITS_FILE="/etc/security/limits.conf"
+   if grep -qE '^\s*\*\s+hard\s+core' $SECURITY_LIMITS_FILE; then
+      sed -ri 's/(hard\s+core\s+)[[:digit:]]+/\1 0/' $SECURITY_LIMITS_FILE
+   else
+      echo "*     hard   core    0" >> $SECURITY_LIMITS_FILE
+   fi
+   if ls /etc/security/limits.d/*.conf > /dev/null; then
+      sed -ri '/^\s*\*\s+hard\s+core/d' /etc/security/limits.d/*.conf
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'   
+echo Disable Core Dumps for SUID programs
+echo xccdf_org.ssgproject.content_rule_sysctl_fs_suid_dumpable
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of fs.suid_dumpable from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*fs.suid_dumpable.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "fs.suid_dumpable" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for fs.suid_dumpable
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w fs.suid_dumpable="0"
+   fi
+   #
+   # If fs.suid_dumpable present in /etc/sysctl.conf, change value to "0"
+   #	else, add "fs.suid_dumpable = 0" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^fs.suid_dumpable")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "0"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^fs.suid_dumpable\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^fs.suid_dumpable\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Enable Randomized Layout of Virtual Address Space
+echo xccdf_org.ssgproject.content_rule_sysctl_kernel_randomize_va_space
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of kernel.randomize_va_space from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*kernel.randomize_va_space.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "kernel.randomize_va_space" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #   
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   # Set runtime for kernel.randomize_va_space
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w kernel.randomize_va_space="2"
+   fi
+   #
+   # If kernel.randomize_va_space present in /etc/sysctl.conf, change value to "2"
+   #	else, add "kernel.randomize_va_space = 2" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^kernel.randomize_va_space")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "2"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^kernel.randomize_va_space\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^kernel.randomize_va_space\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi  
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Apport Service
+echo xccdf_org.ssgproject.content_rule_service_apport_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'apport' 2>/dev/null | grep -q '^installed$'; then
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+      "$SYSTEMCTL_EXEC" stop 'apport.service'
+   fi
+   "$SYSTEMCTL_EXEC" disable 'apport.service'
+   "$SYSTEMCTL_EXEC" mask 'apport.service'
+   # Disable socket activation if we have a unit file for it
+   if "$SYSTEMCTL_EXEC" -q list-unit-files apport.socket; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop 'apport.socket'
+      fi
+      "$SYSTEMCTL_EXEC" mask 'apport.socket'
+   fi
+   # The service may not be running because it has been started and failed,
+   # so let's reset the state so OVAL checks pass.
+   # Service should be 'inactive', not 'failed' after reboot though.
+   "$SYSTEMCTL_EXEC" reset-failed 'apport.service' || true
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Ensure that /etc/at.allow exists
+echo xccdf_org.ssgproject.content_rule_file_at_allow_exists
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   test -f    /etc/at.allow || touch /etc/at.allow
+   chown 0    /etc/at.allow
+   chmod 0640 /etc/at.allow
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Ensure that /etc/cron.allow exists
+echo xccdf_org.ssgproject.content_rule_file_cron_allow_exists
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   test -f    /etc/cron.allow || touch /etc/cron.allow
+   chown 0    /etc/cron.allow
+   chmod 0640 /etc/cron.allow
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Verify Permissions on cron.d
+echo xccdf_org.ssgproject.content_rule_file_permissions_cron_d
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   find -H /etc/cron.d/ -maxdepth 0 -perm /u+s,g+xwrs,o+xwrt -type d -exec chmod u-s,g-xwrs,o-xwrt {} \;
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Verify Permissions on cron.daily
+echo xccdf_org.ssgproject.content_rule_file_permissions_cron_daily
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   find -H /etc/cron.daily/ -maxdepth 0 -perm /u+s,g+xwrs,o+xwrt -type d -exec chmod u-s,g-xwrs,o-xwrt {} \;
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Verify Permissions on cron.hourly
+echo xccdf_org.ssgproject.content_rule_file_permissions_cron_hourly
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   find -H /etc/cron.hourly/ -maxdepth 0 -perm /u+s,g+xwrs,o+xwrt -type d -exec chmod u-s,g-xwrs,o-xwrt {} \;
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Verify Permissions on cron.monthly
+echo xccdf_org.ssgproject.content_rule_file_permissions_cron_monthly
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   find -H /etc/cron.monthly/ -maxdepth 0 -perm /u+s,g+xwrs,o+xwrt -type d -exec chmod u-s,g-xwrs,o-xwrt {} \;
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Verify Permissions on cron.weekly
+echo xccdf_org.ssgproject.content_rule_file_permissions_cron_weekly
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   find -H /etc/cron.weekly/ -maxdepth 0 -perm /u+s,g+xwrs,o+xwrt -type d -exec chmod u-s,g-xwrs,o-xwrt {} \;
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Verify Permissions on crontab
+echo xccdf_org.ssgproject.content_rule_file_permissions_crontab
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   chown root:crontab       /etc/crontab
+   chmod u-xs,g-xwrs,o-xwrt /etc/crontab
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Remove ftp package
+echo xccdf_org.ssgproject.content_rule_package_ftp_removed
+# CAUTION: This remediation script will remove ftp from the system, and may remove any packages # that depend on ftp. 
+# Execute this remediation AFTER testing on a non-production system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "ftp"
+
+
+echo '--------------------------------------'
+echo Remove tnftp Package
+echo xccdf_org.ssgproject.content_rule_package_tnftp_removed
+# CAUTION: This remediation script will remove tnftp from the system, and may remove any packages that depend on tnftp. 
+# Execute this remediation AFTER testing on a non-production system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "tnftp"
+
+
+
+
