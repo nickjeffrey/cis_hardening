@@ -2361,6 +2361,44 @@ find -P /var/log/ -type f -regextype posix-extended \
 
 
 
+
+
+
+echo '--------------------------------------'
+echo Ensure No World-Writable Files Exist
+echo xccdf_org.ssgproject.content_rule_file_permissions_unauthorized_world_writable
+FILTER_NODEV=$(awk '/nodev/ { print $2 }' /proc/filesystems | paste -sd,)
+# Do not consider /sysroot partition because it contains only the physical
+# read-only root on bootable containers.
+PARTITIONS=$(findmnt -n -l -k -it $FILTER_NODEV | awk '{ print $1 }' | grep -v "/sysroot")
+for PARTITION in $PARTITIONS; do
+   find "${PARTITION}" -xdev -type f -perm -002 -exec chmod o-w {} \; 2>/dev/null
+done
+#
+# Ensure /tmp is also fixed when tmpfs is used.
+if grep "^tmpfs /tmp" /proc/mounts; then
+   find /tmp -xdev -type f -perm -002 -exec chmod o-w {} \; 2>/dev/null
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure All Files Are Owned by a Group
+echo xccdf_org.ssgproject.content_rule_file_permissions_ungroupowned
+
+
+
+
+echo '--------------------------------------'
+echo Ensure All Files Are Owned by a User
+echo xccdf_org.ssgproject.content_rule_no_files_unowned_by_user
+
+
+
+
+
 echo '--------------------------------------'
 echo Verify permissions of log files
 echo xccdf_org.ssgproject.content_rule_permissions_local_var_log
@@ -3352,6 +3390,9 @@ fi
 
 
 
+
+
+
 echo '--------------------------------------'                                                                                                                                                                                                
 echo Disable Core Dumps for All Users
 echo xccdf_org.ssgproject.content_rule_disable_users_coredumps
@@ -3539,6 +3580,24 @@ else
 fi
 
 
+echo Verify Group Who Owns /etc/cron.allow file
+echo '--------------------------------------'
+echo xccdf_org.ssgproject.content_rule_file_groupowner_cron_allow
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   newgroup=""
+   if getent group "crontab" >/dev/null 2>&1; then
+      newgroup="crontab"
+   fi
+   if [[ -z "${newgroup}" ]]; then
+      >&2 echo "crontab is not a defined group on the system"
+   else
+      if ! stat -c "%g %G" "/etc/cron.allow" | grep -E -w -q "crontab"; then
+         chgrp --no-dereference "$newgroup" /etc/cron.allow
+      fi
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 
@@ -3627,6 +3686,697 @@ echo xccdf_org.ssgproject.content_rule_package_tnftp_removed
 # Execute this remediation AFTER testing on a non-production system!
 DEBIAN_FRONTEND=noninteractive apt-get remove -y "tnftp"
 
+
+
+echo '--------------------------------------'
+echo Disable Postfix Network Listening
+echo xccdf_org.ssgproject.content_rule_postfix_network_listening_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$' && { dpkg-query --show --showformat='${db:Status-Status}' 'postfix' 2>/dev/null | grep -q '^installed$'; }; then
+   var_postfix_inet_interfaces='loopback-only'
+   if [ -e "/etc/postfix/main.cf" ] ; then
+      LC_ALL=C sed -i "/^\s*inet_interfaces\s\+=\s\+/Id" "/etc/postfix/main.cf"
+   else
+      touch "/etc/postfix/main.cf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/postfix/main.cf"
+   #
+   cp "/etc/postfix/main.cf" "/etc/postfix/main.cf.bak"
+   # Insert at the end of the file
+   printf '%s\n' "inet_interfaces=$var_postfix_inet_interfaces" >> "/etc/postfix/main.cf"
+   # Clean up after ourselves.
+   rm "/etc/postfix/main.cf.bak"
+   systemctl restart postfix
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Ensure Mail Transfer Agent is not Listening on any non-loopback Address
+echo xccdf_org.ssgproject.content_rule_has_nonlocal_mta
+# should have been handled by the previous remediation
+
+
+echo '--------------------------------------'
+echo Uninstall rpcbind Package
+echo xccdf_org.ssgproject.content_rule_package_rpcbind_removed
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # CAUTION: This remediation script will remove rpcbind from the system, and may remove any packages that depend on rpcbind. 
+   # Execute this remediation AFTER testing on a non-production system!
+   DEBIAN_FRONTEND=noninteractive apt-get remove -y "rpcbind"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Disable Network File System nfs
+echo xccdf_org.ssgproject.content_rule_service_nfs_disabled
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+      "$SYSTEMCTL_EXEC" stop 'nfs-server.service'
+   fi
+   "$SYSTEMCTL_EXEC" disable 'nfs-server.service'
+   "$SYSTEMCTL_EXEC" mask 'nfs-server.service'
+   # Disable socket activation if we have a unit file for it
+   if "$SYSTEMCTL_EXEC" -q list-unit-files nfs-server.socket; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop 'nfs-server.socket'
+      fi
+      "$SYSTEMCTL_EXEC" mask 'nfs-server.socket'
+   fi
+   # The service may not be running because it has been started and failed,
+   # so let's reset the state so OVAL checks pass.
+   # Service should be 'inactive', not 'failed' after reboot though.
+   "$SYSTEMCTL_EXEC" reset-failed 'nfs-server.service' || true
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+echo '--------------------------------------'
+echo Uninstall nfs-kernel-server Package
+echo xccdf_org.ssgproject.content_rule_package_nfs-kernel-server_removed
+# CAUTION: This remediation script will remove nfs-kernel-server from the system, and may remove any packages that depend on nfs-kernel-server.
+# Execute this remediation AFTER testing on a non-production system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "nfs-kernel-server"
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Configure Systemd Timesyncd Servers
+echo xccdf_org.ssgproject.content_rule_service_timesyncd_configured
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$' && { dpkg-query --show --showformat='${db:Status-Status}' 'systemd' 2>/dev/null | grep -q '^installed$'; }; then
+   var_multiple_time_servers='0.ubuntu.pool.ntp.org,1.ubuntu.pool.ntp.org,2.ubuntu.pool.ntp.org,3.ubuntu.pool.ntp.org'
+   IFS=',' read -r -a time_servers_array <<< "$var_multiple_time_servers"
+   preferred_ntp_servers_array=("${time_servers_array[@]:0:2}")
+   preferred_ntp_servers=$( echo "${preferred_ntp_servers_array[@]}"|sed -e 's/\s\+/,/g' )
+   fallback_ntp_servers_array=("${time_servers_array[@]:2}")
+   fallback_ntp_servers=$( echo "${fallback_ntp_servers_array[@]}"|sed -e 's/\s\+/,/g' )
+   #
+   IFS=" " mapfile -t current_cfg_arr < <(ls -1 /etc/systemd/timesyncd.d/* /etc/systemd/timesyncd.conf.d/* 2>/dev/null)
+   #
+   config_file="/etc/systemd/timesyncd.conf.d/oscap-remedy.conf"
+   #
+   current_cfg_arr+=( "/etc/systemd/timesyncd.conf" )
+   # Comment existing NTP FallbackNTP settings
+   for current_cfg in "${current_cfg_arr[@]}"
+   do
+      sed -i 's/^NTP/#&/g' "$current_cfg"
+      sed -i 's/^FallbackNTP/#&/g' "$current_cfg"
+   done
+   #
+   if [ ! -d "/etc/systemd/timesyncd.conf.d" ] ; then 
+      mkdir /etc/systemd/timesyncd.conf.d
+   fi
+   #
+   # Set primary fallback NTP servers in drop-in configuration
+   echo "NTP=$preferred_ntp_servers" >> "$config_file"
+   echo "FallbackNTP=$fallback_ntp_servers" >> "$config_file"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Remove telnet Clients
+echo xccdf_org.ssgproject.content_rule_package_inetutils-telnet_removed
+# CAUTION: This remediation script will remove inetutils-telnet
+# from the system, and may remove any packages
+# that depend on inetutils-telnet. Execute this
+# remediation AFTER testing on a non-production
+# system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "inetutils-telnet"
+
+
+echo '--------------------------------------'
+echo Remove telnet Clients
+echo xccdf_org.ssgproject.content_rule_package_telnet_removed
+# CAUTION: This remediation script will remove telnet
+# from the system, and may remove any packages
+# that depend on telnet. Execute this
+# remediation AFTER testing on a non-production
+# system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "telnet"
+
+
+
+
+echo '--------------------------------------'
+echo Uninstall rsync Package
+echo xccdf_org.ssgproject.content_rule_package_rsync_removed
+# CAUTION: This remediation script will remove rsync
+# from the system, and may remove any packages
+# that depend on rsync. Execute this
+# remediation AFTER testing on a non-production
+# system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "rsync"
+
+
+
+
+
+echo '--------------------------------------'
+echo Uninstall net-snmp Package
+echo xccdf_org.ssgproject.content_rule_package_net-snmp_removed
+# CAUTION: This remediation script will remove snmpd
+# from the system, and may remove any packages
+# that depend on snmpd. Execute this
+# remediation AFTER testing on a non-production
+# system!
+DEBIAN_FRONTEND=noninteractive apt-get remove -y "snmpd"
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set SSH Client Alive Count Max
+echo xccdf_org.ssgproject.content_rule_sshd_set_keepalive
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   var_sshd_set_keepalive='3'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveCountMax\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveCountMax $var_sshd_set_keepalive" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Set SSH Client Alive Interval
+echo xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   sshd_idle_timeout_value='300'
+   test -d /etc/ssh/sshd_config.d || mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*ClientAliveInterval\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "ClientAliveInterval $sshd_idle_timeout_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable Host-Based Authentication
+echo xccdf_org.ssgproject.content_rule_disable_host_auth
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*HostbasedAuthentication\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "HostbasedAuthentication no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable SSH Access via Empty Passwords
+echo xccdf_org.ssgproject.content_rule_sshd_disable_empty_passwords
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitEmptyPasswords\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitEmptyPasswords no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable SSH Support for .rhosts Files
+echo xccdf_org.ssgproject.content_rule_sshd_disable_rhosts
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*IgnoreRhosts\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "IgnoreRhosts yes" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+echo '--------------------------------------'
+echo Disable SSH Root Login
+echo xccdf_org.ssgproject.content_rule_sshd_disable_root_login
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitRootLogin\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitRootLogin\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitRootLogin\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitRootLogin no" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Do Not Allow SSH Environment Options
+echo xccdf_org.ssgproject.content_rule_sshd_do_not_permit_user_env
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*PermitUserEnvironment\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "PermitUserEnvironment no" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Enable SSH Warning Banner
+echo xccdf_org.ssgproject.content_rule_sshd_enable_warning_banner_net
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*Banner\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*Banner\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*Banner\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "Banner /etc/issue.net" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Ensure SSH LoginGraceTime is configured
+echo xccdf_org.ssgproject.content_rule_sshd_set_login_grace_time
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   var_sshd_set_login_grace_time='60'
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LoginGraceTime\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LoginGraceTime $var_sshd_set_login_grace_time" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set LogLevel to INFO
+echo xccdf_org.ssgproject.content_rule_sshd_set_loglevel_info
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   chmod 0600 /etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf
+   #
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*LogLevel\s\+/Id" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf" "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "LogLevel INFO" > "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   cat "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak" >> "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/01-complianceascode-reinforce-os-defaults.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set SSH authentication attempt limit
+xccdf_org.ssgproject.content_rule_sshd_set_max_auth_tries
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   sshd_max_auth_tries_value='4'
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxAuthTries\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxAuthTries $sshd_max_auth_tries_value" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Set SSH MaxSessions limit
+echo xccdf_org.ssgproject.content_rule_sshd_set_max_sessions
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   var_sshd_max_sessions='10'
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxSessions\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxSessions $var_sshd_max_sessions" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Ensure SSH MaxStartups is configured
+echo xccdf_org.ssgproject.content_rule_sshd_set_maxstartups
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   var_sshd_set_maxstartups='10:30:60'
+   mkdir -p /etc/ssh/sshd_config.d
+   touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf
+   #
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config"
+   LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d"/*.conf
+   if [ -e "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" ] ; then
+      LC_ALL=C sed -i "/^\s*MaxStartups\s\+/Id" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   else
+      touch "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   #
+   cp "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf" "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "MaxStartups $var_sshd_set_maxstartups" > "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   cat "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak" >> "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
+
+echo '--------------------------------------'
+echo Use Only Strong Ciphers
+echo xccdf_org.ssgproject.content_rule_sshd_use_strong_ciphers
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   if [ -e "/etc/ssh/sshd_config" ] ; then
+      LC_ALL=C sed -i "/^\s*Ciphers\s\+/Id" "/etc/ssh/sshd_config"
+   else
+      touch "/etc/ssh/sshd_config"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config"
+   #
+   cp "/etc/ssh/sshd_config" "/etc/ssh/sshd_config.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "Ciphers aes128-ctr,aes192-ctr,aes256-ctr,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com" > "/etc/ssh/sshd_config"
+   cat "/etc/ssh/sshd_config.bak" >> "/etc/ssh/sshd_config"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Use Only Strong MACs
+echo xccdf_org.ssgproject.content_rule_sshd_use_strong_macs
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   sshd_strong_macs='hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^MACs")
+
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s %s" "$stripped_key" "$sshd_strong_macs"
+
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^MACs\\>" "/etc/ssh/sshd_config"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^MACs\\>.*/$escaped_formatted_output/gi" "/etc/ssh/sshd_config"
+   else
+      if [[ -s "/etc/ssh/sshd_config" ]] && [[ -n "$(tail -c 1 -- "/etc/ssh/sshd_config" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "/etc/ssh/sshd_config"
+      fi
+      printf '%s\n' "$formatted_output" >> "/etc/ssh/sshd_config"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Use Only Strong Key Exchange algorithms
+echo xccdf_org.ssgproject.content_rule_sshd_use_strong_kex
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   sshd_strong_kex='sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256'
+   if [ -e "/etc/ssh/sshd_config" ] ; then
+      LC_ALL=C sed -i "/^\s*KexAlgorithms\s\+/Id" "/etc/ssh/sshd_config"
+   else
+      touch "/etc/ssh/sshd_config"
+   fi
+   # make sure file has newline at the end
+   sed -i -e '$a\' "/etc/ssh/sshd_config"
+   #
+   cp "/etc/ssh/sshd_config" "/etc/ssh/sshd_config.bak"
+   # Insert at the beginning of the file
+   printf '%s\n' "KexAlgorithms $sshd_strong_kex" > "/etc/ssh/sshd_config"
+   cat "/etc/ssh/sshd_config.bak" >> "/etc/ssh/sshd_config"
+   # Clean up after ourselves.
+   rm "/etc/ssh/sshd_config.bak"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Verify Permissions on SSH Server config file
+echo xccdf_org.ssgproject.content_rule_file_permissions_sshd_config
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   chmod u-xs,g-xwrs,o-xwrt /etc/ssh/sshd_config
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 
