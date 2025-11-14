@@ -1253,6 +1253,61 @@ for (( i=0; i<"${#interactive_users[@]}"; i++ )); do
 done
 
 
+echo '--------------------------------------'
+echo Ensure AppArmor Utils is installed
+echo xccdf_org.ssgproject.content_rule_package_apparmor-utils_installed
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ]; then
+   DEBIAN_FRONTEND=noninteractive apt-get install -y "apparmor-utils"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo All AppArmor Profiles are in enforce or complain mode
+xccdf_org.ssgproject.content_rule_all_apparmor_profiles_in_enforce_complain_mode
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && { ( [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && dpkg-query --show --showformat='${db:Status-Status}' 'apparmor' 2>/dev/null | grep -q '^installed$' ); }; then
+   var_apparmor_mode='keep_existing_mode'
+   # make sure apparmor-utils is installed for aa-complain and aa-enforce
+   DEBIAN_FRONTEND=noninteractive apt-get install -y "apparmor-utils"
+   # Reload all AppArmor profiles
+   apparmor_parser -q -r /etc/apparmor.d/
+   #
+   # Set the mode
+   APPARMOR_MODE="$var_apparmor_mode"
+   #
+   if [ "$APPARMOR_MODE" = "enforce" ]; then
+      # Set all profiles to enforce mode except disabled profiles
+      find /etc/apparmor.d -maxdepth 1 ! -type d -exec bash -c '[[ -e "/etc/apparmor.d/disable/$(basename "$1")" ]] || aa-enforce "$1"' _ {} \;
+   fi
+   #
+   if [ "$APPARMOR_MODE" = "complain" ]; then
+      # Load all not-loaded profiles into complain mode
+      apparmor_parser -a --Complain /etc/apparmor.d/
+      echo "***WARNING***: This remediation will not downgrade any existing AppArmor profiles."
+   fi
+   #
+   if [ "$APPARMOR_MODE" = "keep_existing_mode" ]; then
+      echo "***WARNING***: This remediation will not modify any existing AppArmor profiles."
+   fi
+   #
+   UNCONFINED=$(aa-status | grep "processes are unconfined" | awk '{print $1;}')
+   if [ $UNCONFINED -ne 0 ]; then
+      echo -e "***WARNING***: There are some unconfined processes:"
+      echo -e "----------------------------"
+      echo "The may need to have a profile created or activated for them and then be restarted."
+      for PROCESS in "${UNCONFINED[@]}"
+      do
+         echo "$PROCESS"
+      done
+      echo -e "----------------------------"
+      echo "The may need to have a profile created or activated for them and then be restarted."
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
 
 
 
@@ -1375,6 +1430,63 @@ if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null
    if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.all.accept_ra\\>" "${SYSCONFIG_FILE}"; then
       escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
       LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.all.accept_ra\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+echo '--------------------------------------'
+echo Disable Accepting ICMP Redirects for All IPv6 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_all_accept_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.all.accept_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.all.accept_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.all.accept_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   sysctl_net_ipv6_conf_all_accept_redirects_value='0'
+   #
+   # Set runtime for net.ipv6.conf.all.accept_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.all.accept_redirects="$sysctl_net_ipv6_conf_all_accept_redirects_value"
+   fi
+   #
+   # If net.ipv6.conf.all.accept_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.all.accept_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.all.accept_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_all_accept_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.all.accept_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.all.accept_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
    else
       if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
          LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
@@ -1562,6 +1674,66 @@ fi
 
 
 
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting ICMP Redirects by Default on IPv6 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_default_accept_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv6.conf.default.accept_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv6.conf.default.accept_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv6.conf.default.accept_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   sysctl_net_ipv6_conf_default_accept_redirects_value='0'
+   #
+   # Set runtime for net.ipv6.conf.default.accept_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv6.conf.default.accept_redirects="$sysctl_net_ipv6_conf_default_accept_redirects_value"
+   fi
+   #
+   # If net.ipv6.conf.default.accept_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv6.conf.default.accept_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv6.conf.default.accept_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv6_conf_default_accept_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv6.conf.default.accept_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv6.conf.default.accept_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+
+
 
 echo '--------------------------------------'
 echo Disable Kernel Parameter for Accepting Source-Routed Packets on IPv6 Interfaces by Default
@@ -1617,6 +1789,64 @@ else
    echo 'Remediation is not applicable, nothing was done'
 fi
 
+
+
+
+echo '--------------------------------------'
+echo Disable Accepting ICMP Redirects for All IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_accept_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.all.accept_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.all.accept_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.all.accept_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   sysctl_net_ipv4_conf_all_accept_redirects_value='0'
+   #
+   # Set runtime for net.ipv4.conf.all.accept_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.all.accept_redirects="$sysctl_net_ipv4_conf_all_accept_redirects_value"
+   fi
+   #
+   # If net.ipv4.conf.all.accept_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.all.accept_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.all.accept_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_all_accept_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.accept_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.accept_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 
@@ -1845,6 +2075,64 @@ if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null
    if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.all.secure_redirects\\>" "${SYSCONFIG_FILE}"; then
       escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
       LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.all.secure_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
+   else
+      if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
+         LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
+      fi
+      printf '%s\n' "$formatted_output" >> "${SYSCONFIG_FILE}"
+   fi
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
+
+
+echo '--------------------------------------'
+echo Disable Kernel Parameter for Accepting ICMP Redirects by Default on IPv4 Interfaces
+echo xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_accept_redirects
+if dpkg-query --show --showformat='${db:Status-Status}' 'linux-base' 2>/dev/null | grep -q '^installed$'; then
+   # Comment out any occurrences of net.ipv4.conf.default.accept_redirects from /etc/sysctl.d/*.conf files
+   for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /etc/ufw/sysctl.conf; do
+      # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf)
+      if [[ "$(readlink -f "$f")" == "/etc/sysctl.conf" ]]; then continue; fi
+      matching_list=$(grep -P '^(?!#).*[\s]*net.ipv4.conf.default.accept_redirects.*$' $f | uniq )
+      if ! test -z "$matching_list"; then
+         while IFS= read -r entry; do
+            escaped_entry=$(sed -e 's|/|\\/|g' <<< "$entry")
+            # comment out "net.ipv4.conf.default.accept_redirects" matches to preserve user data
+            sed -i --follow-symlinks "s/^${escaped_entry}$/# &/g" $f
+         done <<< "$matching_list"
+      fi
+   done
+   #
+   # Set sysctl config file which to save the desired value
+   #
+   SYSCONFIG_FILE="/etc/sysctl.conf"
+   #
+   sysctl_net_ipv4_conf_default_accept_redirects_value='0'
+   #
+   # Set runtime for net.ipv4.conf.default.accept_redirects
+   #
+   if ! /bin/false ; then
+      /sbin/sysctl -q -n -w net.ipv4.conf.default.accept_redirects="$sysctl_net_ipv4_conf_default_accept_redirects_value"
+   fi
+   #
+   # If net.ipv4.conf.default.accept_redirects present in /etc/sysctl.conf, change value to appropriate value
+   #	else, add "net.ipv4.conf.default.accept_redirects = value" to /etc/sysctl.conf
+   #
+   # Strip any search characters in the key arg so that the key can be replaced without
+   # adding any search characters to the config file.
+   stripped_key=$(sed 's/[\^=\$,;+]*//g' <<< "^net.ipv4.conf.default.accept_redirects")
+   #
+   # shellcheck disable=SC2059
+   printf -v formatted_output "%s = %s" "$stripped_key" "$sysctl_net_ipv4_conf_default_accept_redirects_value"
+   #
+   # If the key exists, change it. Otherwise, add it to the config_file.
+   # We search for the key string followed by a word boundary (matched by \>),
+   # so if we search for 'setting', 'setting2' won't match.
+   if LC_ALL=C grep -q -m 1 -i -e "^net.ipv4.conf.default.accept_redirects\\>" "${SYSCONFIG_FILE}"; then
+      escaped_formatted_output=$(sed -e 's|/|\\/|g' <<< "$formatted_output")
+      LC_ALL=C sed -i --follow-symlinks "s/^net.ipv4.conf.default.accept_redirects\\>.*/$escaped_formatted_output/gi" "${SYSCONFIG_FILE}"
    else
       if [[ -s "${SYSCONFIG_FILE}" ]] && [[ -n "$(tail -c 1 -- "${SYSCONFIG_FILE}" || true)" ]]; then
          LC_ALL=C sed -i --follow-symlinks '$a'\\ "${SYSCONFIG_FILE}"
@@ -4123,8 +4411,10 @@ fi
 
 
 
-
-
+echo '--------------------------------------'
+echo Limit Users SSH Access
+echo xccdf_org.ssgproject.content_rule_sshd_limit_user_access
+# skipping this because it is onerous to manually allow each SSH user
 
 echo '--------------------------------------'
 echo Ensure SSH LoginGraceTime is configured
