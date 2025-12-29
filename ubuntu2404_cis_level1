@@ -21,6 +21,14 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 
+echo '--------------------------------------'
+echo Install auditd Package
+if dpkg-query --show --showformat='${db:Status-Status}' 'auditd' 2>/dev/null | grep -q '^installed$'; then
+   DEBIAN_FRONTEND=noninteractive apt-get install -y "auditd"
+else
+   echo 'Remediation is not applicable, nothing was done'
+fi
+
 
 echo '--------------------------------------'
 echo 6.1.1 Ensure AIDE is installed
