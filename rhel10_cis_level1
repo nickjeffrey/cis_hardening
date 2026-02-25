@@ -1381,6 +1381,19 @@ if grep -q ^apache /etc/passwd; then
     fi
 fi
 # other users in addition to root also need to be able to use cron
+if grep -q ^httpd /etc/passwd; then
+    if ! grep -q ^httpd /etc/cron.allow; then
+        echo 'httpd' >> /etc/cron.allow 
+    fi
+fi
+# other users in addition to root also need to be able to use cron
+if grep -q ^www-user /etc/passwd; then
+    if ! grep -q ^www-user /etc/cron.allow; then
+        echo 'www-user' >> /etc/cron.allow 
+    fi
+fi
+
+# other users in addition to root also need to be able to use cron
 if grep -q ^nagios /etc/passwd; then
     if ! grep -q ^nagios /etc/cron.allow; then
         echo 'nagios' >> /etc/cron.allow 
