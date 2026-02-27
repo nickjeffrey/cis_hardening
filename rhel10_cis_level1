@@ -5,6 +5,7 @@
 # CHANGE LOG
 # ----------
 # 2025-09-21	njeffrey    Script created based on RHEL10 CIS remediation template
+# 2026-02-26    njeffrey    Add sections for removing kernel modules cramfs jffs2 usb-storage
 
 
 
@@ -19,6 +20,102 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Error: This script must be run as root. Use sudo to run this script." >&2
     exit 1
 fi
+
+
+echo '--------------------------------------'
+echo 1.1.1.1 Ensure cramfs kernel module is not available
+lsmod | grep "^cramfs " && (echo Unloading cramfs kernel module ; modprobe -r cramfs ; echo Removing kernel module ; rmmod cramfs)
+if [ ! -f "/etc/modprobe.d/60-cramfs.conf" ]; then
+   echo "install cramfs /bin/false" | sudo tee /etc/modprobe.d/60-cramfs.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist cramfs" | sudo tee -a /etc/modprobe.d/60-cramfs.conf
+fi
+
+echo 1.1.1.5 Ensure jffs2 kernel module is not available
+lsmod | grep "^jffs2 " && (echo Unloading jffs2 kernel module ; modprobe -r jffs2 ; echo Removing kernel module ; rmmod jffs2)
+if [ ! -f "/etc/modprobe.d/60-jffs2.conf" ]; then
+   echo "install jffs2 /bin/false" | sudo tee /etc/modprobe.d/60-jffs2.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist jffs2" | sudo tee -a /etc/modprobe.d/60-jffs2.conf
+fi
+
+echo 1.1.1.10 Ensure usb-storage kernel module is not available
+lsmod | grep "^usb-storage " && (echo Unloading usb-storage kernel module ; modprobe -r usb-storage ; echo Removing kernel module ; rmmod usb-storage)
+if [ ! -f "/etc/modprobe.d/60-usb-storage.conf" ]; then
+   echo "install usb-storage /bin/false" | sudo tee /etc/modprobe.d/60-usb-storage.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist usb-storage" | sudo tee -a /etc/modprobe.d/60-usb-storage.conf
+fi
+
+echo 3.2.1 Ensure atm kernel module is not available
+lsmod | grep "^atm " && (echo Unloading atm kernel module ; modprobe -r atm ; echo Removing kernel module ; rmmod atm)
+if [ ! -f "/etc/modprobe.d/60-atm.conf" ]; then
+   echo "install atm /bin/false" | sudo tee /etc/modprobe.d/60-atm.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist atm" | sudo tee -a /etc/modprobe.d/60-atm.conf
+fi
+
+echo 3.2.2 Ensure can kernel module is not available
+lsmod | grep "^can " && (echo Unloading can kernel module ; modprobe -r can ; echo Removing kernel module ; rmmod can)
+if [ ! -f "/etc/modprobe.d/60-can.conf" ]; then
+   echo "install can /bin/false" | sudo tee /etc/modprobe.d/60-can.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist can" | sudo tee -a /etc/modprobe.d/60-can.conf
+fi
+echo 3.2.4 Ensure tipc kernel module is not available
+lsmod | grep "^tipc " && (echo Unloading tipc kernel module ; modprobe -r tipc ; echo Removing kernel module ; rmmod tipc)
+if [ ! -f "/etc/modprobe.d/60-tipc.conf" ]; then
+   echo "install can /bin/false" | sudo tee /etc/modprobe.d/60-tipc.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist tipc" | sudo tee -a /etc/modprobe.d/60-tipc.conf
+fi
+echo 3.2.5 Ensure rds kernel module is not available
+lsmod | grep "^rds " && (echo Unloading tipc kernel module ; modprobe -r rds ; echo Removing kernel module ; rmmod rds)
+if [ ! -f "/etc/modprobe.d/60-rds.conf" ]; then
+   echo "install rds /bin/false" | sudo tee /etc/modprobe.d/60-rds.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist rds" | sudo tee -a /etc/modprobe.d/60-rds.conf
+fi
+
+
+echo '--------------------------------------'
+echo 1.5.1 Ensure core file size is configured
+if [ ! -f "/etc/security/limits.d/60-limits.conf" ]; then
+   echo "* hard core 0" | sudo tee /etc/security/limits.d/60-limits.conf
+fi
+
+echo '--------------------------------------'
+echo 1.5.5. Ensure kernel.dmesg restrict is configured
+if [ ! -f "/etc/sysctl.d/99-dmesg-restrict.conf" ]; then
+   echo "kernel.dmesg_restrict = 1" | sudo tee /etc/sysctl.d/99-dmesg-restrict.conf
+fi
+echo 1.5.7. Ensure kernel.yama.ptrace scope is configured
+if [ ! -f "/etc/sysctl.d/10-ptrace.conf" ]; then
+   echo "kernel.yama.ptrace_scope = 1" | sudo tee /etc/sysctl.d/10-ptrace.conf
+fi
+echo 1.5.8. Ensure kernel.randomize va space is configured
+if [ ! -f "/etc/sysctl.d/60-kernel_sysctl.conf" ]; then
+   echo 'kernel.randomize_va_space = 2' | sudo tee /etc/sysctl.d/60-kernel_sysctl.conf
+fi
+
+echo '--------------------------------------'
+echo 6.2.3.4. Ensure rsyslog log file creation mode is configured
+# confirm permissions are 640 or tighter, default is 644
+if [ -f "/etc/rsyslog.conf" ]; then
+   chmod 640 /etc/rsyslog.conf
+fi
+
+echo '--------------------------------------'
+echo 6.2.4.1. Ensure access to all logfiles has been configured
+# Log files contain information from many services on the the local system, 
+# or in the event of a centralized log server, others systems logs as well.
+# In general log files are found in /var/log/, although application can be 
+# configured to store logs elsewhere. 
+# Should your application store logs in another, ensure to run the same test on that location.
+# Remove group wx and user rwx permissions from all log files          
+find /var/log -type f -exec chmod g-wx,o-rwx {} +
+
+
 
 
 # Section 1: Noexec on /tmp
