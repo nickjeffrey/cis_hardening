@@ -1718,8 +1718,11 @@ else
 fi
 
 
-
-
+echo '--------------------------------------'
+echo 1.5.4. Ensure fs.suid dumpable is configured
+[ ! -d "/etc/sysctl.d/" ] && mkdir -p /etc/sysctl.d/
+[ ! -f "/etc/sysctl.d/60-fs_sysctl.conf" ] && touch /etc/sysctl.d/60-fs_sysctl.conf
+grep "fs.suid_dumpable = 0" /etc/sysctl.d/60-fs_sysctl.conf || printf '%s\n' "" "fs.suid_dumpable = 0" >> /etc/sysctl.d/60-fs_sysctl.conf
 
 
 
