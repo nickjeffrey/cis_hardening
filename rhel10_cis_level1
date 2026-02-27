@@ -320,8 +320,21 @@ else
 fi
 
 
+echo '--------------------------------------'
+echo 5.2.7 Ensure access to the su command is restricted.
+grep ^sugroup: /etc/group || (echo Creating group sugroup ; groupadd sugroup)
+test -f /etc/pam.d/su || touch /etc/pam.d/su
+if [ -f /etc/pam.d/su ]; then 
+   grep "auth required pam_wheel.so use_uid group=sugroup" /etc/pam.d/su || echo "auth required pam_wheel.so use_uid group=sugroup" >> /etc/pam.d/su
+fi
 
-
+echo '--------------------------------------'
+echo 5.3.2.1.1. Ensure password failed attempts lockout is configured
+for l_pam_file in system-auth password-auth; do
+l_authselect_file="/etc/authselect/$(head -1 /etc/authselect/authselect.conf | grep 'custom/')/$l_pam_file"
+sed -ri 's/(^\s*auth\s+(requisite|required|sufficient)\s+pam_faillock\.so.*)(\s+deny\s*=\s*\S+)(.*$)/\1\4/' "$l_authselect_file"
+done
+authselect apply-changes
 
 
 echo '--------------------------------------'
