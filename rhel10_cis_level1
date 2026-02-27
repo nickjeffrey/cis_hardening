@@ -65,12 +65,12 @@ fi
 echo 3.2.4 Ensure tipc kernel module is not available
 lsmod | grep "^tipc " && (echo Unloading tipc kernel module ; modprobe -r tipc ; echo Removing kernel module ; rmmod tipc)
 if [ ! -f "/etc/modprobe.d/60-tipc.conf" ]; then
-   echo "install can /bin/false" | sudo tee /etc/modprobe.d/60-tipc.conf
+   echo "install tipc /bin/false" | sudo tee /etc/modprobe.d/60-tipc.conf
    # Blacklisting the module provides an additional layer of prevention
    echo "blacklist tipc" | sudo tee -a /etc/modprobe.d/60-tipc.conf
 fi
 echo 3.2.5 Ensure rds kernel module is not available
-lsmod | grep "^rds " && (echo Unloading tipc kernel module ; modprobe -r rds ; echo Removing kernel module ; rmmod rds)
+lsmod | grep "^rds " && (echo Unloading rds kernel module ; modprobe -r rds ; echo Removing kernel module ; rmmod rds)
 if [ ! -f "/etc/modprobe.d/60-rds.conf" ]; then
    echo "install rds /bin/false" | sudo tee /etc/modprobe.d/60-rds.conf
    # Blacklisting the module provides an additional layer of prevention
