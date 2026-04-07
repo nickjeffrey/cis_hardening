@@ -143,7 +143,8 @@ mount | grep /tmp | grep noexec || echo ERROR: /tmp filesystem is not mounted wi
 
 
 
-# NOTE: lots of apps depend on shared memory segments being executable, we should probably not set /dev/shm to noexec by default, which is what happens now
+# NOTE: lots of apps depend on shared memory segments being executable, 
+# keep an eye on this to see if setting /dev/shm to noexec breaks anything.
 # Section 2: Noexec on /dev/shm
 echo '--------------------------------------'
 echo 1.1.2.1.1 Ensure /dev/shm is configured
@@ -153,8 +154,6 @@ if ! grep -q "^tmpfs /dev/shm" /etc/fstab; then
     echo 'tmpfs /dev/shm tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0' | sudo tee -a /etc/fstab
     sudo systemctl daemon-reload
     sudo mount -o remount /dev/shm
-else
-    echo "Not implementing /dev/shm noexec due to potential risk of breaking things."
 fi
 
 
