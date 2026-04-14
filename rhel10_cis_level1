@@ -76,6 +76,15 @@ if [ ! -f "/etc/modprobe.d/60-rds.conf" ]; then
    # Blacklisting the module provides an additional layer of prevention
    echo "blacklist rds" | sudo tee -a /etc/modprobe.d/60-rds.conf
 fi
+echo 3.2.6 Ensure sctp kernel module is not available
+lsmod | grep "^sctp " && (echo Unloading sctp kernel module ; modprobe -r sctp ; echo Removing kernel module ; rmmod sctp)
+if [ ! -f "/etc/modprobe.d/60-sctp.conf" ]; then
+   echo "install sctp /bin/false" | sudo tee /etc/modprobe.d/60-sctp.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist sctp" | sudo tee -a /etc/modprobe.d/60-sctp.conf
+fi
+
+
 
 
 echo '--------------------------------------'
