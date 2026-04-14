@@ -62,6 +62,13 @@ if [ ! -f "/etc/modprobe.d/60-can.conf" ]; then
    # Blacklisting the module provides an additional layer of prevention
    echo "blacklist can" | sudo tee -a /etc/modprobe.d/60-can.conf
 fi
+echo 3.2.3 Ensure dccp kernel module is not available
+lsmod | grep "^dccp " && (echo Unloading dccp kernel module ; modprobe -r dccp ; echo Removing kernel module ; rmmod dccp)
+if [ ! -f "/etc/modprobe.d/60-dccp.conf" ]; then
+   echo "install dccp /bin/false" | sudo tee /etc/modprobe.d/60-dccp.conf
+   # Blacklisting the module provides an additional layer of prevention
+   echo "blacklist dccp" | sudo tee -a /etc/modprobe.d/60-dccp.conf
+fi
 echo 3.2.4 Ensure tipc kernel module is not available
 lsmod | grep "^tipc " && (echo Unloading tipc kernel module ; modprobe -r tipc ; echo Removing kernel module ; rmmod tipc)
 if [ ! -f "/etc/modprobe.d/60-tipc.conf" ]; then
@@ -85,6 +92,10 @@ if [ ! -f "/etc/modprobe.d/60-sctp.conf" ]; then
 fi
 
 
+echo '--------------------------------------'
+echo 1.2.1.2 Ensure gpgcheck is configured
+test -f /etc/dnf/dnf.conf && sed -i 's/^gpgcheck\s*=\s*.*/gpgcheck=1/' /etc/dnf/dnf.conf
+find /etc/yum.repos.d/ -name "*.repo" -exec echo "Checking:" {} \; -exec sed -i "s/^gpgcheck\s*=\s*.*/gpgcheck=1/" {} \;
 
 
 echo '--------------------------------------'
