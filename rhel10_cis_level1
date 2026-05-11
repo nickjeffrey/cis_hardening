@@ -2147,6 +2147,18 @@ echo "6.2.1.1 Enable systemd-journald Service"
 echo "Not implemented"
 
 
+echo 6.2.2.1.3 Enable systemd-journal-upload Service
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core && { ( ( [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && rpm --quiet -q systemd-journal-remote ) ); }; then
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   "$SYSTEMCTL_EXEC" unmask 'systemd-journal-upload.service'
+   if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+      "$SYSTEMCTL_EXEC" start 'systemd-journal-upload.service'
+   fi
+   "$SYSTEMCTL_EXEC" enable 'systemd-journal-upload.service'
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
 echo '--------------------------------------'
 echo "6.2.2.1.4 Disable systemd-journal-remote Socket"
