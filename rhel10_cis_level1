@@ -3038,10 +3038,15 @@ else
     >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
-echo 1.4.2 All GRUB configuration files must have mode 0600 or more restrictive
+echo 1.4.2 All GRUB configuration files must be owned by root
 if [ -d /boot/grub2 ]; then
-   chgrp root /boot/grub2
-   chown root /boot/grub2
-   chmod 0600 /boot/grub2
+   chown root:root /boot/grub2
 fi
 
+echo 1.4.2 All GRUB configuration files have mode 0600 or more restrictive
+# Remediation is applicable only in certain platforms
+if ( rpm --quiet -q grub2-common && rpm --quiet -q kernel-core ); then
+   find -P /boot/grub2/ -maxdepth 1 -perm /u+xs,g+xwrs,o+xwrt  -type f -regextype posix-extended -regex '^.*$' -exec chmod u-xs,g-xwrs,o-xwrt {} \;
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
