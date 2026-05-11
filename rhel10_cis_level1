@@ -1807,17 +1807,17 @@ done
 
 
 
-
-echo '--------------------------------------'
-echo "6.2.2.1.1 Install systemd-journal-remote Package"
-# Remediation is applicable only in certain platforms
-if rpm --quiet -q kernel; then
-   if ! rpm -q --quiet "systemd-journal-remote" ; then
-      dnf install -y "systemd-journal-remote"
-   fi
-else
-    >&2 echo 'Remediation is not applicable, nothing was done'
-fi
+## commented out, typically use rsyslog instead of systemd-journal-remote
+#echo '--------------------------------------'
+#echo "6.2.2.1.1 Install systemd-journal-remote Package"
+## Remediation is applicable only in certain platforms
+#if rpm --quiet -q kernel; then
+#   if ! rpm -q --quiet "systemd-journal-remote" ; then
+#      dnf install -y "systemd-journal-remote"
+#   fi
+#else
+#    >&2 echo 'Remediation is not applicable, nothing was done'
+#fi
 
 
 
@@ -1857,26 +1857,33 @@ else
     >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
-
-echo 6.2.1.4 Ensure journald and rsyslog Are Not Active Together
-echo In this example, we will prefer rsyslog over journald-remote, adjust as appropriate for your site.
-# Running multiple logging systems concurrently can cause conflicts, 
-# resource contention, and inconsistent logging behavior. 
-# Systems should use either rsyslog or systemd-journald, but not both simultaneously. 
-# This ensures predictable logging behavior and prevents potential issues with log duplication or loss.
-if systemctl is-active systemd-journald ; then
-   echo Disabling systemd-journald
-   systemctl stop    systemd-journald-dev-log.socket
-   systemctl stop    systemd-journald.socket
-   systemctl stop    systemd-journald.service
-   #systemctl disable systemd-journald systemd-journald.socket systemd-journald-dev-log.socket
-fi
-if systemctl is-active rsyslog ; then
-   echo Confirmed rsyslog is active
-else
-   systemctl enable rsyslog
-   systemctl start  rsyslog
-fi
+# This rule is intentionally commented out, because Red Hat default recommendation is to use both.
+# This CIS control is not universally applicable. 
+# The CIS justifications about excessive system load caused by logging are negligible on modern systems.
+# Running both systemd-journald and rsyslog is a common, 
+# vendor-supported enterprise configuration and often the preferred design. 
+# Unless you have standardized on journal-only logging, 
+# this rule should typically be tailored or marked as an accepted exception rather than enforced.
+#
+#echo 6.2.1.4 Ensure journald and rsyslog Are Not Active Together
+#echo In this example, we will prefer rsyslog over journald-remote, adjust as appropriate for your site.
+## Running multiple logging systems concurrently can cause conflicts, 
+## resource contention, and inconsistent logging behavior. 
+## Systems should use either rsyslog or systemd-journald, but not both simultaneously. 
+## This ensures predictable logging behavior and prevents potential issues with log duplication or loss.
+#if systemctl is-active systemd-journald ; then
+#   echo Disabling systemd-journald
+#   systemctl stop    systemd-journald-dev-log.socket
+#   systemctl stop    systemd-journald.socket
+#   systemctl stop    systemd-journald.service
+#   #systemctl disable systemd-journald systemd-journald.socket systemd-journald-dev-log.socket
+#fi
+#if systemctl is-active rsyslog ; then
+#   echo Confirmed rsyslog is active
+#else
+#   systemctl enable rsyslog
+#   systemctl start  rsyslog
+#fi
 
 
 #
