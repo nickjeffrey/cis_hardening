@@ -3039,4 +3039,9 @@ else
 fi
 
 echo 1.4.2 All GRUB configuration files must have mode 0600 or more restrictive
-test -d /boot/grub2 && chmod 0600 /boot/grub2
+if [ -d /boot/grub2 ]; then
+   chgrp root /boot/grub2
+   chown root /boot/grub2
+   chmod 0600 /boot/grub2
+fi
+
