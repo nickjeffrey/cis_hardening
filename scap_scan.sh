@@ -100,14 +100,14 @@ oscap info --fetch-remote-resources --profile $scap_profile $datastream_file
 # Title: Standard System Security Profile for Oracle Linux 9            Id: xccdf_org.ssgproject.content_profile_standard  (cannot find CIS profile for Oracle Linux)
 # Title: CIS Ubuntu Linux 24.04 LTS Benchmark for Level 1 - Server      Id: xccdf_org.ssgproject.content_profile_cis_level1_server
 
+# perform a compliance scan, saving the results to XML results file
+oscap xccdf eval --profile $scap_profile --results $results_file $datastream_file
 
-# perform a compliance scan, saving the results to XML results file and HTML report file
-oscap xccdf eval --profile $scap_profile --results $results_file --report $report_file $datastream_file
-
+# generate human readable HTML report from the compliance scan performed in the previous step
+oscap xccdf generate report --output $report_file $results_file
 
 # generate an ansible playboook that can be optionally used to remediate any issues found
 oscap xccdf generate fix --fix-type ansible --output $ansible_playbook --result-id "" $results_file
-
 
 # tell the sysadmin what has happened
 echo "A user-friendly report has been written to $report_file"
