@@ -3038,3 +3038,5 @@ else
     >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
+echo 1.4.2 All GRUB configuration files must have mode 0600 or more restrictive
+test -d /boot/grub2 && chmod 0600 /boot/grub2
