@@ -5,6 +5,7 @@
 # 2025-04-08  njeffrey  Script created at https://github.com/nickjeffrey/cis_hardening
 # 2025-04-09  njeffrey  Add support for RHEL8, RHEL9, RHEL10
 # 2025-09-30  njeffrey  Add support for Oracle Linux 9
+# 2026-06-23  njeffrey  Add support for Rocky Linux 10
 
 # NOTES
 # -----
@@ -62,6 +63,7 @@ cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 9"  && d
 cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 10" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel10-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
 cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 11" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel11-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1 
 cat /etc/os-release | grep PRETTY_NAME | grep "Red Hat Enterprise Linux 12" && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rhel12-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
+cat /etc/os-release | grep PRETTY_NAME | grep "Rocky Linux 10"              && datastream_file=/usr/share/xml/scap/ssg/content/ssg-rl10-ds.xml                         && scap_profile=xccdf_org.ssgproject.content_profile_cis_server_l1  
 cat /etc/os-release | grep PRETTY_NAME | grep "Fedora"                      && datastream_file=/usr/share/xml/scap/ssg/content/ssg-fedora-ds.xml                         && scap_profile=unknown 
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 8"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol8-ds.xml                            && scap_profile=xccdf_org.ssgproject.content_profile_standard 
 cat /etc/os-release | grep PRETTY_NAME | grep "Oracle Linux Server 9"       && datastream_file=/usr/share/xml/scap/ssg/content/ssg-ol9-ds.xml                            && scap_profile=xccdf_org.ssgproject.content_profile_standard 
