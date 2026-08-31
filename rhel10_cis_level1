@@ -7,7 +7,7 @@
 # 2025-09-21	njeffrey    Script created based on RHEL10 CIS remediation template
 # 2026-02-26    njeffrey    Add sections for removing kernel modules cramfs jffs2 usb-storage
 # 2026-08-31    njeffrey    Add section 1.2.1.1 install sequoia-sq
-
+# 2026-08-31    njeffrey    Add section 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
 
 # Enable debugging
 set -x
@@ -3271,6 +3271,47 @@ else
     >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
+
+echo '-----------------------------'
+echo 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
+# https://ncp.nist.gov/cce: CCE-88902-2
+# This is similar to the previous section that put all the hardening into /etc/ssh/sshd_config
+# But this newer version puts the exclusions into their own individual files
+#
+# This section will create multiple custom crypto policy modules
+#  to enforce the use of strong ciphers and MACs in SSHD
+#
+expected_crypto_policy="DEFAULT"
+#
+expected_crypto_policy="${expected_crypto_policy}:NO-SSHCBC"
+cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+cipher@SSH = -*-CBC
+EOF
+#
+expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKCIPHERS"
+cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC
+EOF
+#
+expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKMACS"
+cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128* -HMAC-SHA1*
+EOF
+#
+expected_crypto_policy="${expected_crypto_policy}:NO-WEAKMAC"
+cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+mac = -*-128*
+EOF
+#
+#
+current_crypto_policy=$(update-crypto-policies --show)
+if [[ "$current_crypto_policy" != "$expected_crypto_policy" ]] ; then
+    update-crypto-policies --set "$expected_crypto_policy"
+fi
+#
+# Sample output to confirm policies are in place:
+# # update-crypto-policies --show
+# DEFAULT:NO-SSHCBC:NO-SSHWEAKCIPHERS:NO-SSHWEAKMACS:NO-WEAKMAC
 
 
 
