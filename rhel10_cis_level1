@@ -6,7 +6,7 @@
 # ----------
 # 2025-09-21	njeffrey    Script created based on RHEL10 CIS remediation template
 # 2026-02-26    njeffrey    Add sections for removing kernel modules cramfs jffs2 usb-storage
-
+# 2026-08-31    njeffrey    Add section 1.2.1.1 install sequoia-sq
 
 
 # Enable debugging
@@ -160,6 +160,16 @@ if [ ! -f "/etc/modprobe.d/60-sctp.conf" ]; then
    echo "blacklist sctp" | sudo tee -a /etc/modprobe.d/60-sctp.conf
 fi
 
+echo '--------------------------------------'
+echo 1.2.1.1 Install sequoia-sq Package
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core; then
+   if ! rpm -q --quiet "sequoia-sq" ; then
+      dnf install -y "sequoia-sq"
+   fi
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
 echo '--------------------------------------'
 echo 1.2.1.2 Ensure gpgcheck is configured
