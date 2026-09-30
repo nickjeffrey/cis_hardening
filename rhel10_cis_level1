@@ -9,7 +9,7 @@
 # 2026-08-31    njeffrey    Add section 1.2.1.1 install sequoia-sq
 # 2026-08-31    njeffrey    Add section 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
 # 2026-09-30    njeffrey    Add section 3.1.3. Disable Bluetooth service
-
+# 2026-09-30    njeffrey    Add section 6.2.3.4 Ensure rsyslog default file permissions configured
 # Enable debugging
 set -x
 
@@ -203,6 +203,30 @@ echo 6.2.3.4. Ensure rsyslog log file creation mode is configured
 # confirm permissions are 640 or tighter, default is 644
 if [ -f "/etc/rsyslog.conf" ]; then
    chmod 640 /etc/rsyslog.conf
+fi
+
+echo '--------------------------------------'
+echo 6.2.3.4 Ensure rsyslog Default File Permissions Configured
+# This will create a file in /etc/rsyslog.d/
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core; then
+   find /etc/rsyslog.d/ -name '*.conf' -exec sed -i '/^\s*\$FileCreateMode/d' {} +
+   changes_made=false
+   if ! grep -qE '^\s*\$FileCreateMode\s+0640'  /etc/rsyslog.conf; then
+      if grep -qE '^\s*\$FileCreateMode'        /etc/rsyslog.conf; then
+         sed -i '/^\s*\$FileCreateMode/ s/^/#/' /etc/rsyslog.conf
+      fi
+      ## Assume there is no filter named as 00-, otherwise those filters 
+      ## might be included before this configuration and create file with different permissions
+      echo '$FileCreateMode 0640' > /etc/rsyslog.d/00-rsyslog_filecreatemode.conf
+      chmod 0644 /etc/rsyslog.d/00-rsyslog_filecreatemode.conf
+      changes_made=true
+   fi
+   if [[ "$changes_made" == "true" ]] && [[ $(systemctl is-system-running) != "offline" ]]; then
+      systemctl restart rsyslog.service
+   fi
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
 echo '--------------------------------------'
