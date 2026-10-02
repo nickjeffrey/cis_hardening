@@ -10,6 +10,9 @@
 # 2026-08-31    njeffrey    Add section 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
 # 2026-09-30    njeffrey    Add section 3.1.3. Disable Bluetooth service
 # 2026-09-30    njeffrey    Add section 6.2.3.4 Ensure rsyslog default file permissions configured
+# 2026-10-02    njeffrey    Add section 5.1.2 Verify Permissions on SSH Server Private *_key Key Files
+
+
 # Enable debugging
 set -x
 
@@ -2919,7 +2922,39 @@ else
 fi
 
 
+echo '--------------------------------------'
+echo 5.1.1 Verify Permissions on SSH Server Config File
+# Service configuration files enable or disable features of their respective 
+# services that if configured incorrectly can lead to insecure and vulnerable configurations. 
+# Therefore, service configuration files should be owned by the correct group to prevent unauthorized changes.
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core; then
+   find -P /etc/ssh/sshd_config.d/ -maxdepth 1 -perm /u+xs,g+xwrs,o+xwrt  -type f -regextype posix-extended -regex '^.*$' -exec chmod u-xs,g-xwrs,o-xwrt {} \;
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
+
+echo '--------------------------------------'
+echo "5.1.2 Verify Permissions on SSH Server Private *_key Key Files"
+# SSH server private keys - files that match the /etc/ssh/*_key glob, have to have restricted permissions. 
+# If those files are owned by the root user and the root group, they have to have the 0600 permission or stricter.
+# If they are owned by the root user, but by a dedicated group ssh_keys, they still have to have the 0600 permission or stricter.
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core; then
+   for keyfile in /etc/ssh/*_key; do
+      test -f "$keyfile" || continue
+      if test root:root = "$(stat -c "%U:%G" "$keyfile")"; then
+         chmod u-xs,g-xwrs,o-xwrt "$keyfile"
+      elif test root:ssh_keys = "$(stat -c "%U:%G" "$keyfile")"; then
+         chmod u-xs,g-xwrs,o-xwrt "$keyfile"
+      else
+         echo "Key-like file '$keyfile' is owned by an unexpected user:group combination"
+      fi
+   done
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 
@@ -2954,15 +2989,6 @@ else
 fi
 
 
-
-echo '--------------------------------------'
-echo 5.1.1 Verify Permissions on SSH Server Config File
-# Remediation is applicable only in certain platforms
-if rpm --quiet -q kernel-core; then
-   find -P /etc/ssh/sshd_config.d/ -maxdepth 1 -perm /u+xs,g+xwrs,o+xwrt  -type f -regextype posix-extended -regex '^.*$' -exec chmod u-xs,g-xwrs,o-xwrt {} \;
-else
-   >&2 echo 'Remediation is not applicable, nothing was done'
-fi
 
 
 
@@ -3306,36 +3332,46 @@ echo 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
 # This section will create multiple custom crypto policy modules
 #  to enforce the use of strong ciphers and MACs in SSHD
 #
+# start with the DEFAULT policy, will append in subsequent sections
 expected_crypto_policy="DEFAULT"
 #
+expected_crypto_policy="${expected_crypto_policy}:NO-SHA1"
+if [[ ! -f "/etc/crypto-policies/policies/modules/NO-SHA1.pmod" ]]; then
+   echo '# Disable SHA1 hash and signature support' > /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+   echo 'hash = -SHA1'                             >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+   echo 'sign = -*-SHA1'                           >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+   echo 'sha1_in_certs = 0'                        >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+   chmod 0644 /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+fi
 expected_crypto_policy="${expected_crypto_policy}:NO-SSHCBC"
-cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
-cipher@SSH = -*-CBC
-EOF
+echo 'cipher@SSH = -*-CBC' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
 #
 expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKCIPHERS"
-cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
-cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC
-EOF
+echo 'cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC -CHACHA20-POLY1305' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
 #
 expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKMACS"
-cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
-mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128* -HMAC-SHA1*
-EOF
+echo 'mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128*' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
 #
 expected_crypto_policy="${expected_crypto_policy}:NO-WEAKMAC"
-cat << 'EOF' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
-mac = -*-128*
-EOF
+echo 'mac = -*-128*' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+chmod 0644 /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
 #
+# this module is applicable only if rpm-sequoia scope is available in crypto-policies
+if [[ -f /etc/crypto-policies/back-ends/rpm-sequoia.config ]] ; then
+   expected_crypto_policy="${expected_crypto_policy}:NO-RPMSHA1"
+   echo 'hash@rpm = -SHA1' > /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
+   chmod 0644 /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
+fi
 #
 current_crypto_policy=$(update-crypto-policies --show)
 if [[ "$current_crypto_policy" != "$expected_crypto_policy" ]] ; then
     update-crypto-policies --set "$expected_crypto_policy"
 fi
-#
 # Sample output to confirm policies are in place:
-# # update-crypto-policies --show
+# update-crypto-policies --show
 # DEFAULT:NO-SSHCBC:NO-SSHWEAKCIPHERS:NO-SSHWEAKMACS:NO-WEAKMAC
 
 
