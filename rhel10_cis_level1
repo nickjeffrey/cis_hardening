@@ -3659,3 +3659,9 @@ if ( rpm --quiet -q grub2-common && rpm --quiet -q kernel-core ); then
 else
    >&2 echo 'Remediation is not applicable, nothing was done'
 fi
+
+
+
+echo '--------------------------------------'
+echo end of remediation script
+echo '--------------------------------------'
