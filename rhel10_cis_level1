@@ -3313,57 +3313,98 @@ else
     >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
-
 echo '-----------------------------'
 echo 5.1.6 Implement Custom Crypto Policy Modules for CIS Benchmark
+# This section has some logic to differentiate RHEL9 from RHEL10 due to slightly different policies
 # https://ncp.nist.gov/cce: CCE-88902-2
 # This is similar to the previous section that put all the hardening into /etc/ssh/sshd_config
 # But this newer version puts the exclusions into their own individual files
 #
-# This section will create multiple custom crypto policy modules
-#  to enforce the use of strong ciphers and MACs in SSHD
+# This will create multiple custom crypto policy modules to enforce the use of strong ciphers and MACs in SSHD
 #
-# start with the DEFAULT policy, will append in subsequent sections
-expected_crypto_policy="DEFAULT"
-#
-expected_crypto_policy="${expected_crypto_policy}:NO-SHA1"
-if [[ ! -f "/etc/crypto-policies/policies/modules/NO-SHA1.pmod" ]]; then
-   echo '# Disable SHA1 hash and signature support' > /etc/crypto-policies/policies/modules/NO-SHA1.pmod
-   echo 'hash = -SHA1'                             >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
-   echo 'sign = -*-SHA1'                           >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
-   echo 'sha1_in_certs = 0'                        >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
-   chmod 0644 /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+if [ -f /etc/os-release ]; then
+   # Load the variables from the file into the script environment
+   . /etc/os-release
+   #  
+   # This section is for RHEL9, policies are slightly different for each major release
+   if [[ "$VERSION_ID" == 9* ]]; then
+      echo "Detected Enterprise Linux 9"
+      #
+      # start with the DEFAULT policy, will append in subsequent sections
+      expected_crypto_policy="DEFAULT"
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SHA1"
+      if [[ ! -f "/etc/crypto-policies/policies/modules/NO-SHA1.pmod" ]]; then
+         echo '# Disable SHA1 hash and signature support' > /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+         echo 'hash = -SHA1'                             >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+         echo 'sign = -*-SHA1'                           >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+         echo 'sha1_in_certs = 0'                        >> /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+         chmod 0644 /etc/crypto-policies/policies/modules/NO-SHA1.pmod
+      fi
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHCBC"
+      echo 'cipher@SSH = -*-CBC' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKCIPHERS"
+      echo 'cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC -CHACHA20-POLY1305' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKMACS"
+      echo 'mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128*' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-WEAKMAC"
+      echo 'mac = -*-128*' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+      #
+      # this module is applicable only if rpm-sequoia scope is available in crypto-policies
+      if [[ -f /etc/crypto-policies/back-ends/rpm-sequoia.config ]] ; then
+         expected_crypto_policy="${expected_crypto_policy}:NO-RPMSHA1"
+         echo 'hash@rpm = -SHA1' > /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
+         chmod 0644 /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
+      fi
+      #
+      current_crypto_policy=$(update-crypto-policies --show)
+      if [[ "$current_crypto_policy" != "$expected_crypto_policy" ]] ; then
+          update-crypto-policies --set "$expected_crypto_policy"
+      fi
+      # Sample output to confirm policies are in place:
+      # update-crypto-policies --show
+      # DEFAULT:NO-SHA1:NO-SSHCBC:NO-SSHWEAKCIPHERS:NO-SSHWEAKMACS:NO-WEAKMAC:NO-RPMSHA1
+   fi
+   #
+   #
+   if [[ "$VERSION_ID" == 10* ]]; then
+      echo "Detected Enterprise Linux 10"
+      #
+      # start with the DEFAULT policy, will append in subsequent sections
+      expected_crypto_policy="DEFAULT"
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHCBC"
+      echo 'cipher@SSH = -*-CBC' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKCIPHERS"
+      echo 'cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKMACS"
+      echo 'mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128* -HMAC-SHA1*' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
+      #
+      expected_crypto_policy="${expected_crypto_policy}:NO-WEAKMAC"
+      echo 'mac = -*-128*' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+      chmod 0644 /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
+      #
+      current_crypto_policy=$(update-crypto-policies --show)
+      if [[ "$current_crypto_policy" != "$expected_crypto_policy" ]] ; then
+          update-crypto-policies --set "$expected_crypto_policy"
+      fi
+      # Sample output to confirm policies are in place:
+      # update-crypto-policies --show
+      # DEFAULT:NO-SSHCBC:NO-SSHWEAKCIPHERS:NO-SSHWEAKMACS:NO-WEAKMAC
+   fi
 fi
-expected_crypto_policy="${expected_crypto_policy}:NO-SSHCBC"
-echo 'cipher@SSH = -*-CBC' > /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
-chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHCBC.pmod
-#
-expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKCIPHERS"
-echo 'cipher@SSH = -3DES-CBC -AES-128-CBC -AES-192-CBC -AES-256-CBC -CHACHA20-POLY1305' > /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
-chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKCIPHERS.pmod
-#
-expected_crypto_policy="${expected_crypto_policy}:NO-SSHWEAKMACS"
-echo 'mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128*' > /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
-chmod 0644 /etc/crypto-policies/policies/modules/NO-SSHWEAKMACS.pmod
-#
-expected_crypto_policy="${expected_crypto_policy}:NO-WEAKMAC"
-echo 'mac = -*-128*' > /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
-chmod 0644 /etc/crypto-policies/policies/modules/NO-WEAKMAC.pmod
-#
-# this module is applicable only if rpm-sequoia scope is available in crypto-policies
-if [[ -f /etc/crypto-policies/back-ends/rpm-sequoia.config ]] ; then
-   expected_crypto_policy="${expected_crypto_policy}:NO-RPMSHA1"
-   echo 'hash@rpm = -SHA1' > /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
-   chmod 0644 /etc/crypto-policies/policies/modules/NO-RPMSHA1.pmod
-fi
-#
-current_crypto_policy=$(update-crypto-policies --show)
-if [[ "$current_crypto_policy" != "$expected_crypto_policy" ]] ; then
-    update-crypto-policies --set "$expected_crypto_policy"
-fi
-# Sample output to confirm policies are in place:
-# update-crypto-policies --show
-# DEFAULT:NO-SSHCBC:NO-SSHWEAKCIPHERS:NO-SSHWEAKMACS:NO-WEAKMAC
 
 
 
