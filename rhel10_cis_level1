@@ -2288,23 +2288,45 @@ done
 
 
 
-## commented out, typically use rsyslog instead of systemd-journal-remote
-#echo '--------------------------------------'
-#echo "6.2.2.1.1 Install systemd-journal-remote Package"
-## Remediation is applicable only in certain platforms
-#if rpm --quiet -q kernel; then
-#   if ! rpm -q --quiet "systemd-journal-remote" ; then
-#      dnf install -y "systemd-journal-remote"
-#   fi
-#else
-#    >&2 echo 'Remediation is not applicable, nothing was done'
-#fi
+
+echo '--------------------------------------'
+echo "6.2.2.1.1 Install systemd-journal-remote Package"
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel; then
+   if ! rpm -q --quiet "systemd-journal-remote" ; then
+      dnf install -y "systemd-journal-remote"
+   fi
+else
+    >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 
 echo '--------------------------------------'
 echo "6.2.1.1 Enable systemd-journald Service"
 echo "Not implemented"
+
+
+echo '--------------------------------------'
+echo 6.2.2.1.4 Disable systemd-journal-remote Socket
+# Journald supports the ability to receive messages from remote hosts, thus acting as a log server. 
+# Clients should not receive data from other hosts. 
+# NOTE: The same package, systemd-journal-remote , is used for both sending logs to remote hosts and receiving incoming logs. 
+# With regards to receiving logs, there are two Systemd unit files; systemd-journal-remote.socket and systemd-journal-remote.service.
+# If a client is configured to also receive data, thus turning it into a server, the client system is acting outside its operational boundary.
+# Remediation is applicable only in certain platforms
+if rpm --quiet -q kernel-core; then
+   SOCKET_NAME="systemd-journal-remote.socket"
+   SYSTEMCTL_EXEC='/usr/bin/systemctl'
+   if "$SYSTEMCTL_EXEC" -q list-unit-files --type socket | grep -q "$SOCKET_NAME"; then
+      if [[ $("$SYSTEMCTL_EXEC" is-system-running) != "offline" ]]; then
+         "$SYSTEMCTL_EXEC" stop "$SOCKET_NAME"
+      fi
+      "$SYSTEMCTL_EXEC" mask "$SOCKET_NAME"
+   fi
+else
+   >&2 echo 'Remediation is not applicable, nothing was done'
+fi
 
 
 echo '--------------------------------------'
