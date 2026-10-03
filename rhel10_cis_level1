@@ -1203,124 +1203,136 @@ if [ -f /etc/pam.d/su ]; then
 fi
 
 
-
 echo '--------------------------------------'
 echo "5.3.3.1.2 Set Lockout Time for Failed Password Attempts"
-# Remediation is applicable only in certain platforms
-if rpm --quiet -q pam; then
-   var_accounts_passwords_pam_faillock_unlock_time='900'
-   if [ -f /usr/bin/authselect ]; then
-      if ! authselect check; then
-         echo "authselect integrity check failed. Remediation aborted!"
-         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-         exit 1
-      fi
-      authselect enable-feature with-faillock
-      authselect apply-changes -b
-   else
-      AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
-      for pam_file in "${AUTH_FILES[@]}"
-      do
-         if ! grep -qE '^\s*auth\s+required\s+pam_faillock\.so\s+(preauth silent|authfail).*$' "$pam_file" ; then
-            sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
-            sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail'         "$pam_file"
-            sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so'               "$pam_file"
-         fi
-         sed -Ei 's/(auth.*)(\[default=die\])(.*pam_faillock\.so)/\1required     \3/g' "$pam_file"
-      done
-   fi
-   #
-   #
-   AUTH_FILES=("/etc/pam.d/system-auth" "/etc/pam.d/password-auth")
-   SKIP_FAILLOCK_CHECK=false
-   #
-   FAILLOCK_CONF="/etc/security/faillock.conf"
-   #
-   # quick and dirty fixes 
-   sudo sed --follow-symlinks -i -e "s/# unlock_time = 600/unlock_time = 900/g"     $FAILLOCK_CONF  #uncomment default setting
-   sudo sed --follow-symlinks -i -e "s/# deny = 3/deny = 5/g"                       $FAILLOCK_CONF  #uncomment default setting
-   sudo sed --follow-symlinks -i -e "s/# fail_interval = 900/fail_interval = 900/g" $FAILLOCK_CONF  #uncomment default setting
-   #
-   # removing "unlock_time = 900" parameters from /etc/pam.d/password-auth and /etc/pam.d/system-auth
-   sudo sed --follow-symlinks -i -e "s/unlock_time = 900//g"     /etc/pam.d/password-auth
-   sudo sed --follow-symlinks -i -e "s/unlock_time = 900//g"     /etc/pam.d/system-auth
-   #
-   # the rest of this section should never get executed
-   #
-   if [ -f $FAILLOCK_CONF ] || [ "$SKIP_FAILLOCK_CHECK" = "true" ]; then
-      regex="^\s*unlock_time\s*="
-      line="unlock_time = $var_accounts_passwords_pam_faillock_unlock_time"
-      if ! grep -q $regex $FAILLOCK_CONF; then
-         echo $line >> $FAILLOCK_CONF
-      else
-         sed -i --follow-symlinks 's|^\s*\(unlock_time\s*=\s*\)\(\S\+\)|\1'"$var_accounts_passwords_pam_faillock_unlock_time"'|g' $FAILLOCK_CONF
-      fi
-      # 
-      for pam_file in "${AUTH_FILES[@]}"
-      do
-         if [ -e "$pam_file" ] ; then
-            PAM_FILE_PATH="$pam_file"
-            if [ -f /usr/bin/authselect ]; then
-               if ! authselect check; then
-                  echo "authselect integrity check failed. Remediation aborted!"
-                  echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-                  echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-                  echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-                  exit 1
-               fi
-               #
-               CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-               # If not already in use, a custom profile is created preserving the enabled features.
-               if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-                  ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-                  # The "local" profile does not contain essential security features required by multiple Benchmarks.
-                  # If currently used, it is replaced by "sssd", which is the best option in this case.
-                  if [[ $CURRENT_PROFILE == local ]]; then
-                     CURRENT_PROFILE="sssd"
-                  fi
-                  authselect create-profile hardening -b $CURRENT_PROFILE
-                  CURRENT_PROFILE="custom/hardening"
-                    
-                  authselect apply-changes -b --backup=before-hardening-custom-profile
-                  authselect select $CURRENT_PROFILE
-                  for feature in $ENABLED_FEATURES; do
-                     authselect enable-feature $feature;
-                  done
-                    
-                  authselect apply-changes -b --backup=after-hardening-custom-profile
-               fi
-               PAM_FILE_NAME=$(basename "$pam_file")
-               PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-               authselect apply-changes -b
-            fi
-            # 
-            if grep -qP "^\s*auth\s.*\bpam_faillock.so\s.*\bunlock_time\b" "$PAM_FILE_PATH"; then
-               sed -i -E --follow-symlinks "s/(.*auth.*pam_faillock.so.*)\bunlock_time\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
-            fi
-            if [ -f /usr/bin/authselect ]; then
-               authselect apply-changes -b
-            fi
-         else
-            echo "$pam_file was not found" >&2
-         fi
-      done
-   else
-      for pam_file in "${AUTH_FILES[@]}"
-      do
-         if ! grep -qE '^\s*auth.*pam_faillock\.so (preauth|authfail).*unlock_time' "$pam_file"; then
-            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*preauth.*silent.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/' "$pam_file"
-            sed -i --follow-symlinks '/^auth.*required.*pam_faillock\.so.*authfail.*/ s/$/ unlock_time='"$var_accounts_passwords_pam_faillock_unlock_time"'/'        "$pam_file"
-         else
-            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*preauth.*silent.*\)\('"unlock_time"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/' "$pam_file"
-            sed -i --follow-symlinks 's/\(^auth.*required.*pam_faillock\.so.*authfail.*\)\('"unlock_time"'=\)[0-9]\+\(.*\)/\1\2'"$var_accounts_passwords_pam_faillock_unlock_time"'\3/'        "$pam_file"
-         fi
-      done
-   fi
-else
-    >&2 echo 'Remediation is not applicable, nothing was done'
+# Configure pam_faillock account lockout policy.
+# On systems using authselect, do not directly modify /etc/pam.d/system-auth or /etc/pam.d/password-auth.
+# Store faillock policy values in /etc/security/faillock.conf.
+#
+FAILLOCK_CONF="/etc/security/faillock.conf"
+FAILLOCK_UNLOCK_TIME="900"
+FAILLOCK_DENY="5"
+FAILLOCK_INTERVAL="900"
+#
+# Verify that PAM is installed.
+#
+if ! rpm --quiet -q pam; then
+   echo "INFO: PAM is not installed."
+   echo "INFO: Remediation is not applicable, nothing was done."
 fi
+# only continue if PAM is installed
+if rpm --quiet -q pam; then
+   #
+   # Verify faillock.conf exists.
+   #
+   if [ ! -f "$FAILLOCK_CONF" ]; then
+      echo "WARNING: $FAILLOCK_CONF was not found."
+      echo "WARNING: CIS 5.3.3.1.2 remediation was not applied."
+      echo "WARNING: Continuing with the remaining CIS remediations."
+   else
+      #
+      # Configure faillock policy.
+      #
+      # Replace an existing setting whether commented or active.
+      # If the setting does not exist, append it.
+      #
+      if grep -Eq '^[[:space:]#]*unlock_time[[:space:]]*=' "$FAILLOCK_CONF"; then
+         sed -Ei 's/^[[:space:]#]*unlock_time[[:space:]]*=.*/unlock_time = '"$FAILLOCK_UNLOCK_TIME"'/' "$FAILLOCK_CONF"
+      else
+         echo "unlock_time = $FAILLOCK_UNLOCK_TIME" >> "$FAILLOCK_CONF"
+      fi
+      if grep -Eq '^[[:space:]#]*deny[[:space:]]*=' "$FAILLOCK_CONF"; then
+         sed -Ei 's/^[[:space:]#]*deny[[:space:]]*=.*/deny = '"$FAILLOCK_DENY"'/' "$FAILLOCK_CONF"
+      else
+         echo "deny = $FAILLOCK_DENY" >> "$FAILLOCK_CONF"
+      fi
+      if grep -Eq '^[[:space:]#]*fail_interval[[:space:]]*=' "$FAILLOCK_CONF"; then
+         sed -Ei 's/^[[:space:]#]*fail_interval[[:space:]]*=.*/fail_interval = '"$FAILLOCK_INTERVAL"'/' "$FAILLOCK_CONF"
+      else
+         echo "fail_interval = $FAILLOCK_INTERVAL" >> "$FAILLOCK_CONF"
+      fi
+      echo "INFO: Configured $FAILLOCK_CONF:"
+      echo "INFO:   deny = $FAILLOCK_DENY"
+      echo "INFO:   fail_interval = $FAILLOCK_INTERVAL"
+      echo "INFO:   unlock_time = $FAILLOCK_UNLOCK_TIME"
+      #
+      # If authselect is installed, use it to configure pam_faillock.
+      #
+      if [ -x /usr/bin/authselect ]; then
+         #
+         # Verify authselect configuration before making changes.
+         #
+         if ! authselect check >/dev/null 2>&1; then
+            echo "WARNING: authselect integrity check failed."
+            echo "WARNING: The faillock policy was written to $FAILLOCK_CONF,"
+            echo "WARNING: but the authselect PAM configuration was not modified."
+            echo "WARNING: Review the currently selected authselect profile."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         else
+            #
+            # Enable pam_faillock only if it is not already enabled.
+            #
+            if authselect current | grep -q 'with-faillock'; then
+               echo "INFO: authselect feature with-faillock is already enabled."
+            else
+               echo "INFO: Enabling authselect feature with-faillock."
+               if authselect enable-feature with-faillock; then
+                  if authselect apply-changes -b; then
+                     echo "INFO: authselect changes applied successfully."
+                  else
+                     echo "WARNING: authselect apply-changes failed."
+                     echo "WARNING: Continuing with the remaining CIS remediations."
+                  fi
+               else
+                  echo "WARNING: Unable to enable authselect feature with-faillock."
+                  echo "WARNING: Continuing with the remaining CIS remediations."
+               fi
+            fi
+         fi
+      else
+         #
+         # authselect is not installed.
+         #
+         # Configure pam_faillock directly in the PAM files.
+         #
+         AUTH_FILES="/etc/pam.d/system-auth /etc/pam.d/password-auth"
+         for pam_file in $AUTH_FILES
+         do
+            if [ ! -f "$pam_file" ]; then
+               echo "WARNING: $pam_file was not found."
+               echo "WARNING: Continuing with the remaining PAM files."
+               continue
+            fi
+            #
+            # Add the preauth pam_faillock entry if it does not exist.
+            #
+            if ! grep -Eq '^[[:space:]]*auth[[:space:]]+required[[:space:]]+pam_faillock\.so.*preauth' "$pam_file"; then
+               sed -i --follow-symlinks '/^auth.*sufficient.*pam_unix\.so.*/i auth        required      pam_faillock.so preauth silent' "$pam_file"
+               echo "INFO: Added pam_faillock preauth to $pam_file."
+            fi
+            #
+            # Add the authfail pam_faillock entry if it does not exist.
+            #
+            if ! grep -Eq '^[[:space:]]*auth[[:space:]]+required[[:space:]]+pam_faillock\.so.*authfail' "$pam_file"; then
+               sed -i --follow-symlinks '/^auth.*required.*pam_deny\.so.*/i auth        required      pam_faillock.so authfail' "$pam_file"
+               echo "INFO: Added pam_faillock authfail to $pam_file."
+            fi
+            #
+            # Add the account pam_faillock entry if it does not exist.
+            #
+            if ! grep -Eq '^[[:space:]]*account[[:space:]]+required[[:space:]]+pam_faillock\.so' "$pam_file"; then
+               sed -i --follow-symlinks '/^account.*required.*pam_unix\.so.*/i account     required      pam_faillock.so' "$pam_file"
+               echo "INFO: Added pam_faillock account entry to $pam_file."
+            fi
+            #
+            # Replace [default=die] with required for pam_faillock.
+            #
+            sed -Ei --follow-symlinks 's/(auth.*)(\[default=die\])([[:space:]]+pam_faillock\.so)/\1required     \3/g' "$pam_file"
+         done
+      fi
+   fi
+fi
+
 
 echo '--------------------------------------'
 echo 5.3.2.2.5 Limit the maximum number of sequential characters in passwords
@@ -1433,197 +1445,137 @@ fi
 
 
 echo '--------------------------------------'
-echo 5.3.2.3.1 Limit Password Reuse: password-auth
-# Remediation is applicable only in certain platforms
-if rpm --quiet -q kernel-core && { rpm --quiet -q pam; }; then
-   var_password_pam_remember='24'
-   var_password_pam_remember_control_flag='requisite,required'
-   var_password_pam_remember_control_flag="$(echo $var_password_pam_remember_control_flag | cut -d \, -f 1)"
-   if [ -f /usr/bin/authselect ]; then
-      if authselect list-features sssd | grep -q with-pwhistory; then
-         if ! authselect check; then
-            echo "authselect integrity check failed. Remediation aborted!"
-            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-            exit 1
-         fi
-         authselect enable-feature with-pwhistory
-         authselect apply-changes -b
-      else
-         if ! authselect check; then
-            echo "authselect integrity check failed. Remediation aborted!"
-            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-            exit 1
-         fi
-         CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-         # If not already in use, a custom profile is created preserving the enabled features.
-         if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-            ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-            # The "local" profile does not contain essential security features required by multiple Benchmarks.
-            # If currently used, it is replaced by "sssd", which is the best option in this case.
-            if [[ $CURRENT_PROFILE == local ]]; then
-               CURRENT_PROFILE="sssd"
-            fi
-            authselect create-profile hardening -b $CURRENT_PROFILE
-            CURRENT_PROFILE="custom/hardening"
-            #
-            authselect apply-changes -b --backup=before-hardening-custom-profile
-            authselect select $CURRENT_PROFILE
-            for feature in $ENABLED_FEATURES; do
-               authselect enable-feature $feature;
-            done
-            #         
-            authselect apply-changes -b --backup=after-hardening-custom-profile
-         fi
-         PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
-         PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-         #
-         authselect apply-changes -b
-         if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
-            # Line matching group + control + module was not found. Check group + module.
-            if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
-               # The control is updated only if one single line matches.
-               sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "$PAM_FILE_PATH"
-            else
-               LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "$PAM_FILE_PATH" | tail -n 1 | cut -d: -f 1)
-               if [ ! -z $LAST_MATCH_LINE ]; then
-                  sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "$PAM_FILE_PATH"
-               else
-                  echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "$PAM_FILE_PATH"
-               fi
-            fi
-         fi
-      fi
+echo "5.3.2.3.1 Limit Password Reuse: password-auth"
+#
+# CIS 5.3.2.3.1
+# Limit password reuse using pam_pwhistory.
+#  On systems using authselect, do not directly modify /etc/pam.d/password-auth.
+#  Store the password history value in /etc/security/pwhistory.conf.
+#
+PWHISTORY_CONF="/etc/security/pwhistory.conf"
+PWHISTORY_REMEMBER="24"
+PAM_FILE="/etc/pam.d/password-auth"
+#
+# Verify that the remediation is applicable.
+#
+if ! rpm --quiet -q kernel-core || ! rpm --quiet -q pam; then
+   echo "INFO: Required packages kernel-core and/or pam are not installed."
+   echo "INFO: Remediation is not applicable, nothing was done."
+fi
+# only continuu if package exists
+if rpm --quiet -q kernel-core || ! rpm --quiet -q pam; then
+   #
+   # Configure password history policy.
+   #
+   if [ ! -f "$PWHISTORY_CONF" ]; then
+      echo "WARNING: $PWHISTORY_CONF was not found."
+      echo "WARNING: Password history value was not configured."
+      echo "WARNING: Continuing with the remaining CIS remediations."
    else
-      if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "/etc/pam.d/password-auth"; then
-         # Line matching group + control + module was not found. Check group + module.
-         if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "/etc/pam.d/password-auth")" -eq 1 ]; then
-            # The control is updated only if one single line matches.
-            sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "/etc/pam.d/password-auth"
-         else
-            LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "/etc/pam.d/password-auth" | tail -n 1 | cut -d: -f 1)
-            if [ ! -z $LAST_MATCH_LINE ]; then
-               sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "/etc/pam.d/password-auth"
-            else
-               echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "/etc/pam.d/password-auth"
-            fi
-         fi
-      fi
-   fi
-   PWHISTORY_CONF="/etc/security/pwhistory.conf"
-   if [ -f $PWHISTORY_CONF ]; then
-      regex="^\s*remember\s*="
-      line="remember = $var_password_pam_remember"
-      if ! grep -q $regex $PWHISTORY_CONF; then
-         echo $line >> $PWHISTORY_CONF
-      else
-         sed -i --follow-symlinks 's|^\s*\(remember\s*=\s*\)\(\S\+\)|\1'"$var_password_pam_remember"'|g' $PWHISTORY_CONF
-      fi
-      if [ -e "/etc/pam.d/password-auth" ] ; then
-         PAM_FILE_PATH="/etc/pam.d/password-auth"
-         if [ -f /usr/bin/authselect ]; then
-            if ! authselect check; then
-               echo "authselect integrity check failed. Remediation aborted!"
-               echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-               echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-               echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-               exit 1
-            fi
-            CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-            # If not already in use, a custom profile is created preserving the enabled features.
-            if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-               ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-               # The "local" profile does not contain essential security features required by multiple Benchmarks.
-               # If currently used, it is replaced by "sssd", which is the best option in this case.
-               if [[ $CURRENT_PROFILE == local ]]; then
-                  CURRENT_PROFILE="sssd"
-               fi
-               authselect create-profile hardening -b $CURRENT_PROFILE
-               CURRENT_PROFILE="custom/hardening"
-               #          
-               authselect apply-changes -b --backup=before-hardening-custom-profile
-               authselect select $CURRENT_PROFILE
-               for feature in $ENABLED_FEATURES; do
-                  authselect enable-feature $feature;
-               done
-               # 
-               authselect apply-changes -b --backup=after-hardening-custom-profile
-            fi
-            PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
-            PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-            #
-            authselect apply-changes -b
-         fi
-         if grep -qP "^\s*password\s.*\bpam_pwhistory.so\s.*\bremember\b" "$PAM_FILE_PATH"; then
-            sed -i -E --follow-symlinks "s/(.*password.*pam_pwhistory.so.*)\bremember\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
-         fi
-         if [ -f /usr/bin/authselect ]; then
-            authselect apply-changes -b
-         fi
-      else
-         echo "/etc/pam.d/password-auth was not found" >&2
-      fi
-   else
-   PAM_FILE_PATH="/etc/pam.d/password-auth"
-   if [ -f /usr/bin/authselect ]; then
-      if ! authselect check; then
-         echo "authselect integrity check failed. Remediation aborted!"
-         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-         exit 1
-      fi
       #
-      CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-      # If not already in use, a custom profile is created preserving the enabled features.
-      if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-         ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-         # The "local" profile does not contain essential security features required by multiple Benchmarks.
-         # If currently used, it is replaced by "sssd", which is the best option in this case.
-         if [[ $CURRENT_PROFILE == local ]]; then
-            CURRENT_PROFILE="sssd"
-         fi
-         authselect create-profile hardening -b $CURRENT_PROFILE
-         CURRENT_PROFILE="custom/hardening"
-         #            
-         authselect apply-changes -b --backup=before-hardening-custom-profile
-         authselect select $CURRENT_PROFILE
-         for feature in $ENABLED_FEATURES; do
-            authselect enable-feature $feature;
-         done
-         #   
-         authselect apply-changes -b --backup=after-hardening-custom-profile
-      fi
-      PAM_FILE_NAME=$(basename "/etc/pam.d/password-auth")
-      PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-      authselect apply-changes -b
-   fi
-   if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
-      # Line matching group + control + module was not found. Check group + module.
-      if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
-         # The control is updated only if one single line matches.
-         sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1requisite \2/" "$PAM_FILE_PATH"
+      # Replace an existing remember setting whether commented or active.
+      # If the setting does not exist, append it.
+      #
+      if grep -Eq '^[[:space:]#]*remember[[:space:]]*=' "$PWHISTORY_CONF"; then
+         sed -Ei 's/^[[:space:]#]*remember[[:space:]]*=.*/remember = '"$PWHISTORY_REMEMBER"'/' "$PWHISTORY_CONF"
       else
-         echo "password    requisite    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+         echo "remember = $PWHISTORY_REMEMBER" >> "$PWHISTORY_CONF"
+      fi
+      echo "INFO: Configured $PWHISTORY_CONF:"
+      echo "INFO:   remember = $PWHISTORY_REMEMBER"
+   fi
+   #
+   # Configure PAM integration.
+   #
+   if [ -x /usr/bin/authselect ]; then
+      #
+      # Verify authselect before making any changes.
+      #
+      if ! authselect check >/dev/null 2>&1; then
+         echo "WARNING: authselect integrity check failed."
+         echo "WARNING: The password history policy may have been written to"
+         echo "WARNING: $PWHISTORY_CONF, but PAM configuration was not modified."
+         echo "WARNING: Review the currently selected authselect profile."
+         echo "WARNING: Continuing with the remaining CIS remediations."
+      else
+         #
+         # Determine whether the current authselect profile supports
+         # the with-pwhistory feature.
+         #
+         CURRENT_PROFILE=$(authselect current -r 2>/dev/null | awk 'NR==1 {print $1}')
+         if [ -z "$CURRENT_PROFILE" ]; then
+            echo "WARNING: Unable to determine the current authselect profile."
+            echo "WARNING: PAM configuration was not modified."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         elif authselect list-features "$CURRENT_PROFILE" 2>/dev/null | grep -qx 'with-pwhistory'; then
+            #
+            # Enable with-pwhistory only if it is not already enabled.
+            #
+            if authselect current | grep -q 'with-pwhistory'; then
+               echo "INFO: authselect feature with-pwhistory is already enabled."
+            else
+               echo "INFO: Enabling authselect feature with-pwhistory."
+               if authselect enable-feature with-pwhistory; then
+                  if authselect apply-changes -b; then
+                     echo "INFO: authselect changes applied successfully."
+                  else
+                     echo "WARNING: authselect apply-changes failed."
+                     echo "WARNING: Continuing with the remaining CIS remediations."
+                  fi
+               else
+                  echo "WARNING: Unable to enable authselect feature with-pwhistory."
+                  echo "WARNING: Continuing with the remaining CIS remediations."
+               fi
+            fi
+         else
+            echo "WARNING: Current authselect profile '$CURRENT_PROFILE'"
+            echo "WARNING: does not support the with-pwhistory feature."
+            echo "WARNING: PAM configuration was not modified."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         fi
+      fi
+   else
+      #
+      # authselect is not installed.
+      #
+      # Configure pam_pwhistory directly in password-auth.
+      #
+      if [ ! -f "$PAM_FILE" ]; then
+         echo "WARNING: $PAM_FILE was not found."
+         echo "WARNING: PAM password history integration was not configured."
+         echo "WARNING: Continuing with the remaining CIS remediations."
+      else
+         #
+         # Check whether pam_pwhistory is already configured.
+         #
+         PWHISTORY_COUNT=$(grep -Ec '^[[:space:]]*password[[:space:]]+[^[:space:]]+[[:space:]]+pam_pwhistory\.so([[:space:]]|$)' "$PAM_FILE")
+         if [ "$PWHISTORY_COUNT" -eq 0 ]; then
+            #
+            # Add pam_pwhistory after the last pam_pwquality entry.
+            #
+            LAST_MATCH_LINE=$(grep -nE '^[[:space:]]*password[[:space:]]+requisite[[:space:]]+pam_pwquality\.so' "$PAM_FILE" | tail -n 1 | cut -d: -f1)
+            if [ -n "$LAST_MATCH_LINE" ]; then
+               sed -i --follow-symlinks "${LAST_MATCH_LINE}a password    requisite    pam_pwhistory.so" "$PAM_FILE"
+               echo "INFO: Added pam_pwhistory to $PAM_FILE."
+            else
+               echo "WARNING: Unable to locate the pam_pwquality entry in $PAM_FILE."
+               echo "WARNING: pam_pwhistory was not added automatically."
+               echo "WARNING: Continuing with the remaining CIS remediations."
+            fi
+         elif [ "$PWHISTORY_COUNT" -eq 1 ]; then
+            #
+            # Ensure the existing pam_pwhistory entry uses requisite.
+            #
+            sed -Ei --follow-symlinks 's/^([[:space:]]*password[[:space:]]+)[^[:space:]]+([[:space:]]+pam_pwhistory\.so)/\1requisite\2/' "$PAM_FILE"
+            echo "INFO: Existing pam_pwhistory entry verified in $PAM_FILE."
+         else
+            echo "WARNING: Multiple pam_pwhistory entries were found in $PAM_FILE."
+            echo "WARNING: PAM configuration was not modified automatically."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         fi
       fi
    fi
-   # Check the option
-   if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*\sremember\b" "$PAM_FILE_PATH"; then
-      sed -i -E --follow-symlinks "/\s*password\s+requisite\s+pam_pwhistory.so.*/ s/$/ remember=$var_password_pam_remember/" "$PAM_FILE_PATH"
-   else
-      sed -i -E --follow-symlinks "s/(\s*password\s+requisite\s+pam_pwhistory.so\s+.*)(remember=)[[:alnum:]]*\s*(.*)/\1\2$var_password_pam_remember \3/" "$PAM_FILE_PATH"
-   fi
-   if [ -f /usr/bin/authselect ]; then
-      authselect apply-changes -b
-   fi
 fi
-else
-   >&2 echo 'Remediation is not applicable, nothing was done'
-fi
-
 
 
 
@@ -1635,189 +1587,135 @@ fi
 
 
 echo '--------------------------------------'
-echo 5.3.2.3.1 Limit Password Reuse: system-auth
-# Remediation is applicable only in certain platforms
-if rpm --quiet -q kernel-core && { rpm --quiet -q pam; }; then
-   var_password_pam_remember='24'
-   var_password_pam_remember_control_flag='requisite,required'
-   var_password_pam_remember_control_flag="$(echo $var_password_pam_remember_control_flag | cut -d \, -f 1)"
-   if [ -f /usr/bin/authselect ]; then
-      if authselect list-features sssd | grep -q with-pwhistory; then
-         if ! authselect check; then
-            echo "authselect integrity check failed. Remediation aborted!"
-            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-            exit 1
-         fi
-         authselect enable-feature with-pwhistory
-         authselect apply-changes -b
-      else
-      if ! authselect check; then
-         echo "authselect integrity check failed. Remediation aborted!"
-         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-         exit 1
-      fi
-      CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-      # If not already in use, a custom profile is created preserving the enabled features.
-      if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-         ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-         # The "local" profile does not contain essential security features required by multiple Benchmarks.
-         # If currently used, it is replaced by "sssd", which is the best option in this case.
-         if [[ $CURRENT_PROFILE == local ]]; then
-            CURRENT_PROFILE="sssd"
-         fi
-         authselect create-profile hardening -b $CURRENT_PROFILE
-         CURRENT_PROFILE="custom/hardening"
-         #   
-         authselect apply-changes -b --backup=before-hardening-custom-profile
-         authselect select $CURRENT_PROFILE
-         for feature in $ENABLED_FEATURES; do
-            authselect enable-feature $feature;
-         done
-         authselect apply-changes -b --backup=after-hardening-custom-profile
-      fi
-      PAM_FILE_NAME=$(basename "/etc/pam.d/system-auth")
-      PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
+echo "5.3.2.3.1 Limit Password Reuse: system-auth"
+#
+# CIS 5.3.2.3.1
+# Limit password reuse using pam_pwhistory.
+# On systems using authselect, do not directly modify /etc/pam.d/system-auth.
+# Store the password history value in /etc/security/pwhistory.conf.
+#
+PWHISTORY_CONF="/etc/security/pwhistory.conf"
+PWHISTORY_REMEMBER="24"
+PAM_FILE="/etc/pam.d/system-auth"
+#
+# Verify that the remediation is applicable.
+#
+if ! rpm --quiet -q kernel-core || ! rpm --quiet -q pam; then
+   echo "INFO: Required packages kernel-core and/or pam are not installed."
+   echo "INFO: Remediation is not applicable, nothing was done."
+fi
+# only continue if applicable
+if  rpm --quiet -q kernel-core || ! rpm --quiet -q pam; then
+   #
+   # Configure password history policy.
+   #
+   if [ ! -f "$PWHISTORY_CONF" ]; then
+      echo "WARNING: $PWHISTORY_CONF was not found."
+      echo "WARNING: Password history value was not configured."
+      echo "WARNING: Continuing with the remaining CIS remediations."
+   else
       #
-      authselect apply-changes -b
-      if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
-         # Line matching group + control + module was not found. Check group + module.
-         if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
-            # The control is updated only if one single line matches.
-            sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "$PAM_FILE_PATH"
-         else
-            LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "$PAM_FILE_PATH" | tail -n 1 | cut -d: -f 1)
-               if [ ! -z $LAST_MATCH_LINE ]; then
-                  sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "$PAM_FILE_PATH"
+      # Replace an existing remember setting whether commented or active.
+      # If the setting does not exist, append it.
+      #
+      if grep -Eq '^[[:space:]#]*remember[[:space:]]*=' "$PWHISTORY_CONF"; then
+         sed -Ei 's/^[[:space:]#]*remember[[:space:]]*=.*/remember = '"$PWHISTORY_REMEMBER"'/' "$PWHISTORY_CONF"
+      else
+         echo "remember = $PWHISTORY_REMEMBER" >> "$PWHISTORY_CONF"
+      fi
+      echo "INFO: Configured $PWHISTORY_CONF:"
+      echo "INFO:   remember = $PWHISTORY_REMEMBER"
+   fi
+   #
+   # Configure PAM integration.
+   #
+   if [ -x /usr/bin/authselect ]; then
+      #
+      # Verify authselect before making any changes.
+      #
+      if ! authselect check >/dev/null 2>&1; then
+         echo "WARNING: authselect integrity check failed."
+         echo "WARNING: The password history policy may have been written to"
+         echo "WARNING: $PWHISTORY_CONF, but PAM configuration was not modified."
+         echo "WARNING: Review the currently selected authselect profile."
+         echo "WARNING: Continuing with the remaining CIS remediations."
+      else
+         #
+         # Determine the current authselect profile.
+         #
+         CURRENT_PROFILE=$(authselect current -r 2>/dev/null | awk 'NR==1 {print $1}')
+         if [ -z "$CURRENT_PROFILE" ]; then
+            echo "WARNING: Unable to determine the current authselect profile."
+            echo "WARNING: PAM configuration was not modified."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         elif authselect list-features "$CURRENT_PROFILE" 2>/dev/null | grep -qx 'with-pwhistory'; then
+            #
+            # Enable with-pwhistory only if it is not already enabled.
+            #
+            if authselect current | grep -q 'with-pwhistory'; then
+               echo "INFO: authselect feature with-pwhistory is already enabled."
+            else
+               echo "INFO: Enabling authselect feature with-pwhistory."
+               if authselect enable-feature with-pwhistory; then
+                  if authselect apply-changes -b; then
+                     echo "INFO: authselect changes applied successfully."
+                  else
+                     echo "WARNING: authselect apply-changes failed."
+                     echo "WARNING: Continuing with the remaining CIS remediations."
+                  fi
                else
-                  echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+                  echo "WARNING: Unable to enable authselect feature with-pwhistory."
+                  echo "WARNING: Continuing with the remaining CIS remediations."
                fi
             fi
-         fi
-      fi
-   else
-   if ! grep -qP "^\s*password\s+\$var_password_pam_remember_control_flag\s+pam_pwhistory.so\s*.*" "/etc/pam.d/system-auth"; then
-      # Line matching group + control + module was not found. Check group + module.
-      if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "/etc/pam.d/system-auth")" -eq 1 ]; then
-         # The control is updated only if one single line matches.
-         sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1$var_password_pam_remember_control_flag \2/" "/etc/pam.d/system-auth"
-      else
-         LAST_MATCH_LINE=$(grep -nP "^password.*requisite.*pam_pwquality\.so" "/etc/pam.d/system-auth" | tail -n 1 | cut -d: -f 1)
-         if [ ! -z $LAST_MATCH_LINE ]; then
-            sed -i --follow-symlinks $LAST_MATCH_LINE" a password     $var_password_pam_remember_control_flag    pam_pwhistory.so" "/etc/pam.d/system-auth"
          else
-            echo "password    $var_password_pam_remember_control_flag    pam_pwhistory.so" >> "/etc/pam.d/system-auth"
+            echo "WARNING: Current authselect profile '$CURRENT_PROFILE'"
+            echo "WARNING: does not support the with-pwhistory feature."
+            echo "WARNING: PAM configuration was not modified."
+            echo "WARNING: Continuing with the remaining CIS remediations."
          fi
-      fi
-   fi
-fi
-PWHISTORY_CONF="/etc/security/pwhistory.conf"
-if [ -f $PWHISTORY_CONF ]; then
-   regex="^\s*remember\s*="
-   line="remember = $var_password_pam_remember"
-   if ! grep -q $regex $PWHISTORY_CONF; then
-      echo $line >> $PWHISTORY_CONF
-   else
-      sed -i --follow-symlinks 's|^\s*\(remember\s*=\s*\)\(\S\+\)|\1'"$var_password_pam_remember"'|g' $PWHISTORY_CONF
-   fi
-   if [ -e "/etc/pam.d/system-auth" ] ; then
-      PAM_FILE_PATH="/etc/pam.d/system-auth"
-      if [ -f /usr/bin/authselect ]; then
-         if ! authselect check; then
-            echo "authselect integrity check failed. Remediation aborted!"
-            echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-            echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-            echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-            exit 1
-         fi
-         CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-         # If not already in use, a custom profile is created preserving the enabled features.
-         if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-            ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-            # The "local" profile does not contain essential security features required by multiple Benchmarks.
-            # If currently used, it is replaced by "sssd", which is the best option in this case.
-            if [[ $CURRENT_PROFILE == local ]]; then
-               CURRENT_PROFILE="sssd"
-            fi
-            authselect create-profile hardening -b $CURRENT_PROFILE
-            CURRENT_PROFILE="custom/hardening"
-            #          
-            authselect apply-changes -b --backup=before-hardening-custom-profile
-            authselect select $CURRENT_PROFILE
-            for feature in $ENABLED_FEATURES; do
-               authselect enable-feature $feature;
-            done
-            authselect apply-changes -b --backup=after-hardening-custom-profile
-         fi
-         PAM_FILE_NAME=$(basename "/etc/pam.d/system-auth")
-         PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-         authselect apply-changes -b
-      fi
-      if grep -qP "^\s*password\s.*\bpam_pwhistory.so\s.*\bremember\b" "$PAM_FILE_PATH"; then
-         sed -i -E --follow-symlinks "s/(.*password.*pam_pwhistory.so.*)\bremember\b=?[[:alnum:]]*(.*)/\1\2/g" "$PAM_FILE_PATH"
-      fi
-      if [ -f /usr/bin/authselect ]; then
-         authselect apply-changes -b
       fi
    else
-      echo "/etc/pam.d/system-auth was not found" >&2
-   fi
-else
-   PAM_FILE_PATH="/etc/pam.d/system-auth"
-   if [ -f /usr/bin/authselect ]; then
-      if ! authselect check; then
-         echo "authselect integrity check failed. Remediation aborted!"
-         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-         exit 1
-      fi
-      CURRENT_PROFILE=$(authselect current -r | awk '{ print $1 }')
-      # If not already in use, a custom profile is created preserving the enabled features.
-      if [[ ! $CURRENT_PROFILE == custom/* ]]; then
-         ENABLED_FEATURES=$(authselect current | tail -n+3 | awk '{ print $2 }')
-         # The "local" profile does not contain essential security features required by multiple Benchmarks.
-         # If currently used, it is replaced by "sssd", which is the best option in this case.
-         if [[ $CURRENT_PROFILE == local ]]; then
-            CURRENT_PROFILE="sssd"
-         fi
-         authselect create-profile hardening -b $CURRENT_PROFILE
-         CURRENT_PROFILE="custom/hardening"
-         authselect apply-changes -b --backup=before-hardening-custom-profile
-         authselect select $CURRENT_PROFILE
-         for feature in $ENABLED_FEATURES; do
-            authselect enable-feature $feature;
-         done
-         authselect apply-changes -b --backup=after-hardening-custom-profile
-      fi
-      PAM_FILE_NAME=$(basename "/etc/pam.d/system-auth")
-      PAM_FILE_PATH="/etc/authselect/$CURRENT_PROFILE/$PAM_FILE_NAME"
-      authselect apply-changes -b
-   fi
-   if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*" "$PAM_FILE_PATH"; then
-      # Line matching group + control + module was not found. Check group + module.
-      if [ "$(grep -cP '^\s*password\s+.*\s+pam_pwhistory.so\s*' "$PAM_FILE_PATH")" -eq 1 ]; then
-         # The control is updated only if one single line matches.
-         sed -i -E --follow-symlinks "s/^(\s*password\s+).*(\bpam_pwhistory.so.*)/\1requisite \2/" "$PAM_FILE_PATH"
+      #
+      # authselect is not installed.
+      #
+      # Configure pam_pwhistory directly in system-auth.
+      #
+      if [ ! -f "$PAM_FILE" ]; then
+         echo "WARNING: $PAM_FILE was not found."
+         echo "WARNING: PAM password history integration was not configured."
+         echo "WARNING: Continuing with the remaining CIS remediations."
       else
-         echo "password    requisite    pam_pwhistory.so" >> "$PAM_FILE_PATH"
+         #
+         # Count existing pam_pwhistory entries.
+         #
+         PWHISTORY_COUNT=$(grep -Ec '^[[:space:]]*password[[:space:]]+[^[:space:]]+[[:space:]]+pam_pwhistory\.so([[:space:]]|$)' "$PAM_FILE")
+         if [ "$PWHISTORY_COUNT" -eq 0 ]; then
+            #
+            # Add pam_pwhistory after the last pam_pwquality entry.
+            #
+            LAST_MATCH_LINE=$(grep -nE '^[[:space:]]*password[[:space:]]+requisite[[:space:]]+pam_pwquality\.so' "$PAM_FILE" | tail -n 1 | cut -d: -f1)
+            if [ -n "$LAST_MATCH_LINE" ]; then
+               sed -i --follow-symlinks "${LAST_MATCH_LINE}a password    requisite    pam_pwhistory.so" "$PAM_FILE"
+               echo "INFO: Added pam_pwhistory to $PAM_FILE."
+            else
+               echo "WARNING: Unable to locate the pam_pwquality entry in $PAM_FILE."
+               echo "WARNING: pam_pwhistory was not added automatically."
+               echo "WARNING: Continuing with the remaining CIS remediations."
+            fi
+         elif [ "$PWHISTORY_COUNT" -eq 1 ]; then
+            #
+            # Ensure the existing pam_pwhistory entry uses requisite.
+            #
+            sed -Ei --follow-symlinks 's/^([[:space:]]*password[[:space:]]+)[^[:space:]]+([[:space:]]+pam_pwhistory\.so)/\1requisite\2/' "$PAM_FILE"
+            echo "INFO: Existing pam_pwhistory entry verified in $PAM_FILE."
+         else
+            echo "WARNING: Multiple pam_pwhistory entries were found in $PAM_FILE."
+            echo "WARNING: PAM configuration was not modified automatically."
+            echo "WARNING: Continuing with the remaining CIS remediations."
+         fi
       fi
    fi
-   # Check the option
-   if ! grep -qP "^\s*password\s+requisite\s+pam_pwhistory.so\s*.*\sremember\b" "$PAM_FILE_PATH"; then
-      sed -i -E --follow-symlinks "/\s*password\s+requisite\s+pam_pwhistory.so.*/ s/$/ remember=$var_password_pam_remember/" "$PAM_FILE_PATH"
-   else
-      sed -i -E --follow-symlinks "s/(\s*password\s+requisite\s+pam_pwhistory.so\s+.*)(remember=)[[:alnum:]]*\s*(.*)/\1\2$var_password_pam_remember \3/" "$PAM_FILE_PATH"
-   fi
-   if [ -f /usr/bin/authselect ]; then
-      authselect apply-changes -b
-   fi
-fi
-else
-   >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
 
@@ -2106,34 +2004,88 @@ echo "Not implemented... Automatic remediation is not available, in order to avo
 
 echo '--------------------------------------'
 echo "5.3.2.4.1 Prevent Login to Accounts With Empty Password"
-# Remediation is applicable only in certain platforms
+#
+# CIS 5.3.2.4.1
+#
+# Prevent authentication using accounts with empty passwords.
+# On systems using authselect, do not directly modify /etc/pam.d/system-auth or /etc/pam.d/password-auth.
+#
+#
+# Verify that the remediation is applicable.
+#
+if ! rpm --quiet -q kernel; then
+   echo "INFO: Remediation is not applicable, nothing was done."
+fi
+# only continue if applicable
 if rpm --quiet -q kernel; then
-   if [ -f /usr/bin/authselect ]; then
-      if ! authselect check; then
-         echo " authselect integrity check failed. Remediation aborted!"
-         echo "This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact."
-         echo "It is not recommended to manually edit the PAM files when authselect tool is available."
-         echo "In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended."
-         exit 1
+   #
+   # Use authselect when available.
+   #
+   if [ -x /usr/bin/authselect ]; then
+      #
+      # Verify the current authselect configuration before making changes.
+      #
+      if ! authselect check >/dev/null 2>&1; then
+         echo "WARNING: authselect integrity check failed."
+         echo "WARNING: This remediation could not be applied because an"
+         echo "WARNING: authselect profile was not selected or the selected"
+         echo "WARNING: profile is not intact."
+         echo "WARNING: PAM files will not be modified manually."
+         echo "WARNING: Continuing with the remaining CIS remediations."
+      else
+         #
+         # Enable without-nullok only if it is not already enabled.
+         #
+         if authselect current | grep -q 'without-nullok'; then
+            echo "INFO: authselect feature without-nullok is already enabled."
+         else
+            echo "INFO: Enabling authselect feature without-nullok."
+            if authselect enable-feature without-nullok; then
+               if authselect apply-changes -b; then
+                  echo "INFO: authselect changes applied successfully."
+               else
+                  echo "WARNING: authselect apply-changes failed."
+                  echo "WARNING: Continuing with the remaining CIS remediations."
+               fi
+            else
+               echo "WARNING: Unable to enable authselect feature without-nullok."
+               echo "WARNING: Continuing with the remaining CIS remediations."
+            fi
+         fi
       fi
-      authselect enable-feature without-nullok
-      authselect apply-changes -b
    else
-      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
-         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
-      fi
-      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/system-auth"; then
-         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/system-auth"
-      fi
-      if grep -qP "^\s*auth\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
-         sed -i -E --follow-symlinks "s/(.*auth.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
-      fi
-      if grep -qP "^\s*password\s+sufficient\s+pam_unix.so\s.*\bnullok\b" "/etc/pam.d/password-auth"; then
-         sed -i -E --follow-symlinks "s/(.*password.*sufficient.*pam_unix.so.*)\bnullok\b=?[[:alnum:]]*(.*)/\1\2/g" "/etc/pam.d/password-auth"
-      fi
+      #
+      # authselect is not installed.
+      #
+      # Remove the nullok option directly from the PAM configuration.
+      #
+      PAM_FILES="/etc/pam.d/system-auth /etc/pam.d/password-auth"
+      for pam_file in $PAM_FILES
+      do
+         if [ ! -f "$pam_file" ]; then
+            echo "WARNING: $pam_file was not found."
+            echo "WARNING: Continuing with the remaining PAM files."
+            continue
+         fi
+         #
+         # Determine whether nullok is currently configured.
+         #
+         if grep -Eq '^[[:space:]]*(auth|password)[[:space:]].*pam_unix\.so.*(^|[[:space:]])nullok([[:space:]]|$)' "$pam_file"; then
+            echo "INFO: Removing nullok from $pam_file."
+            #
+            # Remove nullok when it appears as a standalone pam_unix.so option.
+            #
+            sed -Ei --follow-symlinks \
+               '/^[[:space:]]*(auth|password)[[:space:]].*pam_unix\.so/ {
+                  s/(^|[[:space:]])nullok([[:space:]]|$)/\1\2/g
+                  s/[[:space:]]+$//
+               }' \
+               "$pam_file"
+         else
+            echo "INFO: nullok is not configured in $pam_file."
+         fi
+      done
    fi
-else
-    >&2 echo 'Remediation is not applicable, nothing was done'
 fi
 
 
